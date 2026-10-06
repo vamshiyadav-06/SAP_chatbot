@@ -13,6 +13,10 @@ class MessageResponse(BaseModel):
     content: str
     source_type: Optional[str] = None
     grounding_score: Optional[float] = None
+    is_in_rag_pipeline: Optional[bool] = None
+    kb_score: Optional[float] = None
+    web_score: Optional[float] = None
+    winning_score: Optional[float] = None
     created_at: datetime
     citations: List[CitationResponse] = []
     web_sources: List[WebSourceResponse] = []

@@ -137,7 +137,7 @@ export const apiStreamMessage = async (
   content: string,
   onMetadata: (meta: StreamMetadata) => void,
   onToken: (token: string) => void,
-  onDone: () => void,
+  onDone: (fullAnswer?: string) => void,
   onError: (err: any) => void
 ) => {
   try {
@@ -161,43 +161,63 @@ export const apiStreamMessage = async (
     let buffer = '';
 
     let isCompleted = false;
-    const finishStream = () => {
+    let finalReceivedAnswer: string | undefined = undefined;
+
+    const finishStream = (fullAnswer?: string) => {
       if (!isCompleted) {
         isCompleted = true;
-        onDone();
+        onDone(fullAnswer || finalReceivedAnswer);
+      }
+    };
+
+    const processBlock = (block: string) => {
+      const trimmed = block.trim();
+      if (!trimmed) return;
+      const eventMatch = trimmed.match(/event:\s*(\w+)/);
+      const dataMatch = trimmed.match(/data:\s*([\s\S]+)$/);
+
+      if (eventMatch && dataMatch) {
+        const eventType = eventMatch[1];
+        const rawData = dataMatch[1].trim();
+
+        try {
+          const parsed = JSON.parse(rawData);
+          if (eventType === 'metadata') {
+            onMetadata(parsed);
+          } else if (eventType === 'token') {
+            if (parsed.token !== undefined) {
+              onToken(parsed.token);
+            }
+          } else if (eventType === 'done') {
+            if (parsed.full_answer) {
+              finalReceivedAnswer = parsed.full_answer;
+            }
+            finishStream(parsed.full_answer);
+          }
+        } catch (e) {
+          console.error('SSE JSON parse error:', e, rawData);
+        }
       }
     };
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        if (buffer.trim()) {
+          processBlock(buffer);
+          buffer = '';
+        }
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop() || '';
+      // Standardize Windows CRLF to standard LF
+      const normalized = buffer.replace(/\r\n/g, '\n');
+      const blocks = normalized.split('\n\n');
+      buffer = blocks.pop() || '';
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const eventMatch = line.match(/^event:\s*(\w+)/m);
-        const dataMatch = line.match(/^data:\s*(.+)$/m);
-
-        if (eventMatch && dataMatch) {
-          const eventType = eventMatch[1];
-          const rawData = dataMatch[1];
-
-          try {
-            const parsed = JSON.parse(rawData);
-            if (eventType === 'metadata') {
-              onMetadata(parsed);
-            } else if (eventType === 'token') {
-              onToken(parsed.token);
-            } else if (eventType === 'done') {
-              finishStream();
-            }
-          } catch (e) {
-            console.error('SSE parse error:', e);
-          }
-        }
+      for (const block of blocks) {
+        processBlock(block);
       }
     }
     finishStream();

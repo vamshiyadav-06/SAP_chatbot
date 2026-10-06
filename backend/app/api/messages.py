@@ -166,6 +166,10 @@ def send_message(
         content=assistant_msg.content,
         source_type=assistant_msg.source_type,
         grounding_score=assistant_msg.grounding_score,
+        is_in_rag_pipeline=rag_result.get("is_in_rag_pipeline"),
+        kb_score=rag_result.get("kb_score"),
+        web_score=rag_result.get("web_score"),
+        winning_score=rag_result.get("winning_score"),
         created_at=assistant_msg.created_at,
         citations=[
             {
@@ -191,62 +195,19 @@ def send_message(
     )
 
 def handle_streaming_response(chat_id: str, query: str, db: Session):
-    """Generates Server-Sent Events (SSE) stream."""
+    """Generates Server-Sent Events (SSE) stream using the complete verified RAG pipeline."""
     def event_stream():
-        # First execute retrieval & classification
-        is_sap, _ = sap_classifier.classify(query)
-        if not is_sap:
-            answer = "I can only help with SAP and SAP-related topics."
-            source_type = "refusal"
-            grounding = 0.0
-            citations = []
-            web_sources = []
-        else:
-            candidates = retrieval_service.hybrid_search(db, query, top_k=settings.TOP_K)
-            top_chunks, sufficient = reranking_service.rerank(
-                query, candidates, top_n=settings.RERANK_TOP_K, threshold=settings.SIMILARITY_THRESHOLD
-            )
-            if sufficient and top_chunks:
-                source_type = "knowledge_base"
-                citations = [
-                    {
-                        "document": c["document_name"],
-                        "page": c["page_number"],
-                        "section": c["section"],
-                        "score": c["rerank_score"],
-                        "snippet": c["chunk_text"][:280] + ("..." if len(c["chunk_text"]) > 280 else "")
-                    }
-                    for c in top_chunks
-                ]
-                web_sources = []
-                full_answer = llm_service.generate_answer(query, top_chunks, source_type="knowledge_base")
-                grounding = grounding_service.evaluate_grounding(query, full_answer, top_chunks, source_type="knowledge_base")
-                answer = full_answer
-            elif settings.WEB_FALLBACK_ENABLED:
-                web_res = web_search_service.search_sap_authoritative(query)
-                source_type = "web"
-                citations = []
-                web_sources = [
-                    {"title": w["title"], "url": w["url"], "domain": w["domain"], "snippet": w["snippet"]}
-                    for w in web_res[:3]
-                ]
-                full_answer = llm_service.generate_answer(query, web_res, source_type="web")
-                web_evidence = [
-                    {
-                        "chunk_text": f"{w.get('title', '')} {w.get('snippet', '')}",
-                        "score": 0.85,
-                        "rerank_score": 0.85
-                    }
-                    for w in web_res
-                ]
-                grounding = grounding_service.evaluate_grounding(query, full_answer, web_evidence, source_type="web")
-                answer = full_answer
-            else:
-                source_type = "knowledge_base"
-                grounding = 0.0
-                citations = []
-                web_sources = []
-                answer = "I couldn't find sufficient information about this in the available SAP knowledge base."
+        # Execute unified RAG pipeline with objective score comparison
+        result = rag_service.process_query(db, query)
+        answer = result["answer"]
+        source_type = result["source_type"]
+        grounding = result["grounding_score"]
+        citations = result["citations"]
+        web_sources = result["web_sources"]
+        is_in_rag_pipeline = result.get("is_in_rag_pipeline", False)
+        kb_score = result.get("kb_score", 0.0)
+        web_score = result.get("web_score", 0.0)
+        winning_score = result.get("winning_score", 0.0)
 
         # Save to DB
         assistant_msg = Message(
@@ -286,11 +247,15 @@ def handle_streaming_response(chat_id: str, query: str, db: Session):
                 ))
             db.commit()
 
-        # Stream event 1: metadata (citations, source_type, grounding_score, message_id)
+        # Stream event 1: metadata (citations, source_type, grounding_score, scores, message_id)
         meta_payload = {
             "message_id": assistant_msg.id,
             "source_type": source_type,
             "grounding_score": grounding,
+            "is_in_rag_pipeline": is_in_rag_pipeline,
+            "kb_score": kb_score,
+            "web_score": web_score,
+            "winning_score": winning_score,
             "citations": citations,
             "web_sources": web_sources
         }
@@ -302,7 +267,7 @@ def handle_streaming_response(chat_id: str, query: str, db: Session):
             chunk = t + (" " if i < len(tokens) - 1 else "")
             yield f"event: token\ndata: {json.dumps({'token': chunk})}\n\n"
 
-        # Stream event 3: done
-        yield f"event: done\ndata: {json.dumps({'status': 'complete'})}\n\n"
+        # Stream event 3: done (includes complete full_answer for verification)
+        yield f"event: done\ndata: {json.dumps({'status': 'complete', 'full_answer': answer})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

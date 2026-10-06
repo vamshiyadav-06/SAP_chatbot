@@ -18,22 +18,23 @@ Never invent facts.
 Never use general pretrained knowledge as evidence.
 Never claim that information exists in the private knowledge base unless the supplied evidence supports it.
 
-For private knowledge-base answers:
-- Give a concise, direct answer.
-- Summarize the evidence instead of dumping document text.
-- Preserve important SAP technical terms and definitions.
+For answers:
+- Provide a full, complete, and comprehensive explanation answering all aspects of the user's question.
+- Do not prematurely truncate, summarize excessively, or cut your answer short.
+- Preserve all important SAP technical terms, transaction codes, tables, module names, and architecture definitions.
+- Organize your response logically with clear sections, bullet points, or tables where appropriate.
 - Do not reproduce document headers, confidentiality notices, or unnecessary metadata.
 - Do not mention information that is not supported by the retrieved evidence.
 
 For web answers:
-- Use only the supplied web evidence.
-- Clearly indicate that the information came from web sources.
+- Use the supplied web evidence thoroughly.
+- Explain the key concepts and steps fully.
 
 If the evidence is insufficient, explicitly say that the information could not be verified.
 
 For non-SAP questions, refuse briefly.
 
-Be precise, concise, factual, and evidence-grounded."""
+Be precise, comprehensive, factual, and strictly evidence-grounded."""
 
 
 class LLMService:
@@ -396,7 +397,7 @@ class LLMService:
 
             selected.append(item)
 
-            if len(selected) >= 4:
+            if len(selected) >= 12:
                 break
 
         if not selected:
@@ -419,7 +420,7 @@ class LLMService:
 
             answer = " ".join(
                 item["sentence"]
-                for item in selected[:3]
+                for item in selected[:6]
             )
 
         elif (
@@ -430,14 +431,14 @@ class LLMService:
 
             answer = "\n\n".join(
                 f"- {item['sentence']}"
-                for item in selected[:4]
+                for item in selected[:10]
             )
 
         else:
 
             answer = "\n\n".join(
                 f"- {item['sentence']}"
-                for item in selected[:4]
+                for item in selected[:10]
             )
 
         return (
@@ -493,34 +494,57 @@ class LLMService:
 
             try:
 
-                if (
-                    "groq" in self.provider
-                    or self.api_key.startswith("gsk_")
-                ):
+                is_xai = self.api_key.startswith("xai-") or "grok" in self.provider
+                is_groq = "groq" in self.provider or self.api_key.startswith("gsk_")
 
+                if is_xai:
+                    from openai import OpenAI
+                    client = OpenAI(
+                        api_key=self.api_key,
+                        base_url="https://api.x.ai/v1"
+                    )
+                    candidate_models = [
+                        settings.LLM_MODEL,
+                        "grok-2",
+                        "grok-2-latest",
+                        "grok-beta",
+                        "grok-vision-beta"
+                    ]
+                elif is_groq:
                     from groq import Groq
-
                     client = Groq(
                         api_key=self.api_key
                     )
-
-                    model = "llama-3.3-70b-versatile"
-
+                    candidate_models = [
+                        settings.LLM_MODEL,
+                        "openai/gpt-oss-120b",
+                        "openai/gpt-oss-20b",
+                        "qwen/qwen3.8-27b",
+                        "llama-3.3-70b-versatile",
+                        "llama-3.1-70b-versatile",
+                        "llama-3.1-8b-instant",
+                        "mixtral-8x7b-32768",
+                        "gemma2-9b-it"
+                    ]
                 else:
-
                     from openai import OpenAI
-
                     client = OpenAI(
                         api_key=self.api_key
                     )
+                    candidate_models = [
+                        settings.LLM_MODEL,
+                        "gpt-4o-mini",
+                        "gpt-4o",
+                        "gpt-3.5-turbo"
+                    ]
 
-                    model = (
-                        settings.LLM_MODEL
-                        or "gpt-4o-mini"
-                    )
+                # De-duplicate candidate models while preserving priority order
+                unique_models = []
+                for m in candidate_models:
+                    if m and m not in unique_models:
+                        unique_models.append(m)
 
-                user_prompt = f"""
-USER QUERY:
+                user_prompt = f"""USER QUERY:
 {query}
 
 SOURCE TYPE:
@@ -530,47 +554,47 @@ RETRIEVED EVIDENCE:
 {evidence_context}
 
 TASK:
+Answer the user's question thoroughly, completely, and accurately using ONLY the retrieved evidence above.
 
-Answer the user's question using ONLY the retrieved evidence.
-
-Rules:
-
-1. Do not invent facts.
-2. Do not use outside knowledge.
-3. Do not reproduce large sections of the documents.
-4. Give a concise answer.
-5. Preserve important SAP technical terminology.
-6. Remove document headers and confidentiality notices.
-7. Prefer the evidence that directly answers the user's question.
-8. If the evidence is insufficient, say so.
+Instructions:
+1. Provide a comprehensive, full explanation covering all aspects of the user's question based on the evidence.
+2. Do not cut off, truncate, or prematurely shorten the explanation; present all relevant details, transaction codes, steps, and module definitions in full.
+3. Organize the answer cleanly with clear headings, bullet points, or markdown tables for readability.
+4. Do not invent facts or extrapolate beyond the provided evidence.
+5. If the evidence came from web sources, synthesize a complete answer from the web snippets.
+6. If the evidence is insufficient, state clearly that sufficient information was not available.
 """
 
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": SYSTEM_PROMPT
-                        },
-                        {
-                            "role": "user",
-                            "content": user_prompt
-                        }
-                    ],
-                    temperature=0.1,
-                    max_tokens=500
-                )
+                # Automatically try each model in order; if one fails, choose the next model
+                last_error = None
+                for current_model in unique_models:
+                    try:
+                        logger.info(f"Attempting LLM inference with model: {current_model}")
+                        response = client.chat.completions.create(
+                            model=current_model,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": SYSTEM_PROMPT
+                                },
+                                {
+                                    "role": "user",
+                                    "content": user_prompt
+                                }
+                            ],
+                            temperature=0.1,
+                            max_tokens=4096
+                        )
+                        return response.choices[0].message.content.strip()
+                    except Exception as model_err:
+                        logger.warning(f"Model '{current_model}' encountered error ({model_err}). Automatically trying next model...")
+                        last_error = model_err
+                        continue
 
-                return (
-                    response
-                    .choices[0]
-                    .message
-                    .content
-                    .strip()
-                )
+                if last_error:
+                    raise last_error
 
             except Exception as e:
-
                 logger.warning(
                     f"Cloud LLM error ({e}). "
                     "Using local grounded synthesis."

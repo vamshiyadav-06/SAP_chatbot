@@ -12,7 +12,7 @@ def get_engine():
     """Attempt connecting to configured PostgreSQL database; fallback to SQLite if unavailable."""
     postgres_url = settings.DATABASE_URL
     try:
-        engine = create_engine(postgres_url, pool_pre_ping=True)
+        engine = create_engine(postgres_url, pool_pre_ping=True, connect_args={"connect_timeout": 1})
         # Test connection
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))

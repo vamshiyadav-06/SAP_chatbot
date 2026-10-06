@@ -96,3 +96,27 @@
   font-style: italic;
   margin: 0.75rem 0;
 }
+
+.prose-sap table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.prose-sap th {
+  background-color: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.prose-sap td {
+  border: 1px solid rgba(71, 85, 105, 0.3);
+  padding: 0.5rem 0.75rem;
+  color: #cbd5e1;
+}

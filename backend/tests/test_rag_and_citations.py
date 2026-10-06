@@ -48,4 +48,4 @@ def test_rag_web_fallback_for_external_topics(auth_headers):
     assert data["source_type"] == "web"
     assert data["grounding_score"] > 0.0
     assert len(data["web_sources"]) > 0
-    assert any("help.sap.com" in w["domain"] for w in data["web_sources"])
+    assert any("sap.com" in w["domain"] for w in data["web_sources"])

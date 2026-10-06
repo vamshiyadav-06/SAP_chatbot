@@ -151,14 +151,15 @@ export const ChatPage: React.FC = () => {
         accumulatedText += token;
         setStreamingContent(accumulatedText);
       },
-      () => {
+      (finalText?: string) => {
         // Streaming done
         setIsLoading(false);
+        const resolvedContent = finalText && finalText.length >= accumulatedText.length ? finalText : (accumulatedText || finalText || '');
         const finalAssistantMsg: Message = {
           id: streamMetaRef?.message_id || `msg-${Date.now()}`,
           chat_id: currentId!,
           role: 'assistant',
-          content: accumulatedText,
+          content: resolvedContent,
           source_type: streamMetaRef?.source_type || 'knowledge_base',
           grounding_score: streamMetaRef?.grounding_score,
           created_at: new Date().toISOString(),
@@ -167,7 +168,7 @@ export const ChatPage: React.FC = () => {
         };
         setMessages(prev => {
           if (prev.some(m => m.id === finalAssistantMsg.id)) {
-            return prev;
+            return prev.map(m => m.id === finalAssistantMsg.id ? finalAssistantMsg : m);
           }
           return [...prev, finalAssistantMsg];
         });
