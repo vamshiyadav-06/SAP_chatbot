@@ -28,7 +28,7 @@ export interface Message {
   chat_id: string;
   role: 'user' | 'assistant';
   content: string;
-  source_type?: 'knowledge_base' | 'web' | 'refusal' | 'error';
+  source_type?: 'knowledge_base' | 'web' | 'refusal' | 'error' | 'interrupted';
   grounding_score?: number;
   created_at: string;
   citations: Citation[];

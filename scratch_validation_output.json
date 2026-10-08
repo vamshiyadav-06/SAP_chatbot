@@ -1,0 +1,790 @@
+{
+  "database": {
+    "total_docs": 31,
+    "total_chunks": 10661,
+    "null_embeddings": 0,
+    "dim_mismatches": 0,
+    "missing_fields": {
+      "document_id": 0,
+      "chunk_text": 0,
+      "embedding": 0,
+      "page_number": 0,
+      "section": 0,
+      "metadata_json": 0
+    }
+  },
+  "coverage": [
+    {
+      "Document": "2020_S4H_BRIM_SOM_Device_as_a_Service.pdf",
+      "Title": "SAP S/4HANA BRIM SOM: Device as a Service (DaaS) Architecture",
+      "Pages": 27,
+      "Chunks": 27,
+      "Embedded": 27,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "Authorizations-in-S4-HANA-and-Fiori.pdf",
+      "Title": "Authorizations and Security Architecture in SAP S/4HANA and Fiori",
+      "Pages": 629,
+      "Chunks": 1422,
+      "Embedded": 1422,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "BR234_EN_SOM 2.pdf",
+      "Title": "BR234: SAP S/4HANA Subscription Order Management (SOM) Course Handbook",
+      "Pages": 300,
+      "Chunks": 364,
+      "Embedded": 364,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "BRIM Q Bank.pdf",
+      "Title": "SAP BRIM Certification and Technical Interview Question Bank",
+      "Pages": 7,
+      "Chunks": 19,
+      "Embedded": 19,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "BRIM_AC240_EN_Col16.pdf",
+      "Title": "AC240: SAP BRIM Solution Overview & End-to-End Integration Handbook",
+      "Pages": 299,
+      "Chunks": 348,
+      "Embedded": 348,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "Billing_and_Revenue_Innovation_Management.pdf",
+      "Title": "SAP Billing and Revenue Innovation Management (BRIM) Solution Overview",
+      "Pages": 32,
+      "Chunks": 39,
+      "Embedded": 39,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "Budget billing.pdf",
+      "Title": "SAP FI-CA & BRIM Budget Billing Plan Configuration Guide",
+      "Pages": 5,
+      "Chunks": 5,
+      "Embedded": 5,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "E_Book_ABAP_RESTful_Programming_Model_2020_Rel_NW_wwwERPExamsCom.pdf",
+      "Title": "ABAP RESTful Application Programming Model (RAP) Reference Guide",
+      "Pages": 560,
+      "Chunks": 1137,
+      "Embedded": 1137,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "RAR Contract Reversal Process.pdf",
+      "Title": "SAP Revenue Accounting and Reporting (RAR) Contract Reversal Process",
+      "Pages": 3,
+      "Chunks": 5,
+      "Embedded": 5,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+      "Title": "SAP Press: SAP Billing and Revenue Innovation Management (2nd Edition)",
+      "Pages": 582,
+      "Chunks": 1501,
+      "Embedded": 1501,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP CC.pdf",
+      "Title": "SAP Convergent Charging (CC) Implementation Guide",
+      "Pages": 34,
+      "Chunks": 62,
+      "Embedded": 62,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP CI1.pdf",
+      "Title": "SAP Cloud Integration & Convergent Invoicing Guide (Part 1)",
+      "Pages": 181,
+      "Chunks": 537,
+      "Embedded": 537,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP CI2.pdf",
+      "Title": "SAP Cloud Integration & Convergent Invoicing Guide (Part 2)",
+      "Pages": 217,
+      "Chunks": 482,
+      "Embedded": 482,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP CI3.pdf",
+      "Title": "SAP Cloud Integration & Convergent Invoicing Guide (Part 3)",
+      "Pages": 211,
+      "Chunks": 681,
+      "Embedded": 681,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP CI4.pdf",
+      "Title": "SAP Cloud Integration & Convergent Invoicing Guide (Part 4)",
+      "Pages": 327,
+      "Chunks": 708,
+      "Embedded": 708,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP FI-CA.pdf",
+      "Title": "SAP Contract Accounts Receivable and Payable (FI-CA) Guide",
+      "Pages": 49,
+      "Chunks": 49,
+      "Embedded": 49,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP Revenue Recognition (RAR) Processing Flow, Exemptions, Reversals & System Integration.pdf",
+      "Title": "SAP RAR Revenue Recognition Processing Flow, Exemptions, & System Integration",
+      "Pages": 2,
+      "Chunks": 3,
+      "Embedded": 3,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP-PRESS-Catalog-Shop.pdf",
+      "Title": "SAP Press Technical & Architecture Publication Catalog",
+      "Pages": 88,
+      "Chunks": 181,
+      "Embedded": 181,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_ABAP_Development_and_RAP_Standards.pdf",
+      "Title": "SAP ABAP Development and RAP Standards",
+      "Pages": 20,
+      "Chunks": 60,
+      "Embedded": 60,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_Basis_Administration_and_Security_Handbook.pdf",
+      "Title": "SAP Basis Administration and Security Handbook",
+      "Pages": 20,
+      "Chunks": 62,
+      "Embedded": 62,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_CO_Controlling_Configuration_Handbook.pdf",
+      "Title": "SAP CO Controlling Configuration Handbook",
+      "Pages": 20,
+      "Chunks": 65,
+      "Embedded": 65,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_FI_Financial_Accounting_Guide.pdf",
+      "Title": "SAP FI Financial Accounting Guide",
+      "Pages": 20,
+      "Chunks": 73,
+      "Embedded": 73,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_Fiori_Design_and_Deployment_Manual.pdf",
+      "Title": "SAP Fiori Design and Deployment Manual",
+      "Pages": 20,
+      "Chunks": 61,
+      "Embedded": 61,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_HCM_Human_Capital_Management_Guide.pdf",
+      "Title": "SAP HCM Human Capital Management Guide",
+      "Pages": 20,
+      "Chunks": 60,
+      "Embedded": 60,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_MM_Materials_Management_Manual.pdf",
+      "Title": "SAP MM Materials Management Manual",
+      "Pages": 20,
+      "Chunks": 75,
+      "Embedded": 75,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_PP_Production_Planning_Reference.pdf",
+      "Title": "SAP PP Production Planning Reference",
+      "Pages": 20,
+      "Chunks": 63,
+      "Embedded": 63,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_S4HANA_Architecture_and_Migration_Guide.pdf",
+      "Title": "SAP S4HANA Architecture and Migration Guide",
+      "Pages": 20,
+      "Chunks": 60,
+      "Embedded": 60,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SAP_SD_Sales_and_Distribution_Handbook.pdf",
+      "Title": "SAP SD Sales and Distribution Handbook",
+      "Pages": 20,
+      "Chunks": 63,
+      "Embedded": 63,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "SIMPL_OP1709.pdf",
+      "Title": "Simplification List for SAP S/4HANA Enterprise Management",
+      "Pages": 894,
+      "Chunks": 1565,
+      "Embedded": 1565,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "mg.pdf",
+      "Title": "SAP BRIM Master Guide: Solution Landscapes & Implementation Strategy",
+      "Pages": 43,
+      "Chunks": 81,
+      "Embedded": 81,
+      "Status": "Indexed"
+    },
+    {
+      "Document": "pdfdownload.pdf",
+      "Title": "SAP S/4HANA Subscription Order Management (SOM) Guide",
+      "Pages": 283,
+      "Chunks": 803,
+      "Embedded": 803,
+      "Status": "Indexed"
+    }
+  ],
+  "retrieval_queries": [
+    {
+      "query": "What is SAP BRIM?",
+      "top_score": 0.9048,
+      "grounding_score": 0.9,
+      "supported_claims": 20,
+      "total_claims": 23,
+      "claim_ratio": 0.87,
+      "first_hit_rank": 1,
+      "answer_snippet": "## SAP BRIM \u2013 Billing and Revenue Innovation Management    ### 1. What SAP\u202fBRIM Is   SAP\u202fBRIM (Billing and Revenue Innovation Management) is the SAP\u2011wide solution suite that enables end\u2011to\u2011end **billi",
+      "top_chunks": [
+        {
+          "document": "SAP CC.pdf",
+          "page": 10,
+          "section": "Public",
+          "score": 0.8287
+        },
+        {
+          "document": "BRIM Q Bank.pdf",
+          "page": 4,
+          "section": "Overview",
+          "score": 0.8131
+        },
+        {
+          "document": "BRIM Q Bank.pdf",
+          "page": 1,
+          "section": "Overview",
+          "score": 0.8112
+        },
+        {
+          "document": "SAP CC.pdf",
+          "page": 16,
+          "section": "Sap S/4Hana Brim",
+          "score": 0.8048
+        },
+        {
+          "document": "BRIM Q Bank.pdf",
+          "page": 3,
+          "section": "Overview",
+          "score": 0.8005
+        }
+      ]
+    },
+    {
+      "query": "What is SAP Convergent Invoicing?",
+      "top_score": 1.0,
+      "grounding_score": 0.94,
+      "supported_claims": 24,
+      "total_claims": 25,
+      "claim_ratio": 0.96,
+      "first_hit_rank": 1,
+      "answer_snippet": "**SAP Convergent Invoicing \u2013 Overview**  SAP Convergent Invoicing (CI) is a core component of the **Consume\u2011to\u2011Cash** process in SAP Billing and Revenue Innovation Management (BRIM). It sits between t",
+      "top_chunks": [
+        {
+          "document": "BRIM_AC240_EN_Col16.pdf",
+          "page": 285,
+          "section": "Unit 16",
+          "score": 0.9437
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 211,
+          "section": "Chapter 4",
+          "score": 0.9374
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 30,
+          "section": "1.3.4 Contract Accounting",
+          "score": 0.9324
+        },
+        {
+          "document": "BRIM_AC240_EN_Col16.pdf",
+          "page": 287,
+          "section": "Lesson Overview",
+          "score": 0.9322
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 334,
+          "section": "5 Contract Accounting",
+          "score": 0.93
+        }
+      ]
+    },
+    {
+      "query": "What is SAP Convergent Charging?",
+      "top_score": 1.0,
+      "grounding_score": 0.94,
+      "supported_claims": 34,
+      "total_claims": 35,
+      "claim_ratio": 0.97,
+      "first_hit_rank": 1,
+      "answer_snippet": "**SAP Convergent Charging \u2013 Overview**  SAP Convergent Charging (CC) is the rating and pricing engine that belongs to the SAP Billing and Revenue Innovation Management (BRIM) suite. It is used to calc",
+      "top_chunks": [
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 147,
+          "section": "Chapter 3",
+          "score": 0.9257
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 148,
+          "section": "3 Charging",
+          "score": 0.9222
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 28,
+          "section": "1.3.2 SAP Convergent Charging",
+          "score": 0.9162
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 159,
+          "section": "3.6 Configuring SAP Convergent Charging",
+          "score": 0.9102
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 158,
+          "section": "3 Charging",
+          "score": 0.9089
+        }
+      ]
+    },
+    {
+      "query": "How does Convergent Charging integrate with Convergent Invoicing?",
+      "top_score": 1.0,
+      "grounding_score": 0.92,
+      "supported_claims": 29,
+      "total_claims": 36,
+      "claim_ratio": 0.81,
+      "first_hit_rank": 1,
+      "answer_snippet": "## Integration of **SAP Convergent Charging (CC)** with **SAP Convergent Invoicing (CI)**    The SAP BRIM (Billing and Revenue Innovation Management) suite connects the rating\u2011and\u2011charging engine (CC)",
+      "top_chunks": [
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 212,
+          "section": "4 Invoicing",
+          "score": 0.8807
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 212,
+          "section": "4 Invoicing",
+          "score": 0.8774
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 491,
+          "section": "8.3 Extension for SAP Convergent Invoicing",
+          "score": 0.8756
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 212,
+          "section": "4 Invoicing",
+          "score": 0.8618
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 30,
+          "section": "1.3.4 Contract Accounting",
+          "score": 0.8594
+        }
+      ]
+    },
+    {
+      "query": "What is FI-CA?",
+      "top_score": 0.8643,
+      "grounding_score": 0.89,
+      "supported_claims": 24,
+      "total_claims": 25,
+      "claim_ratio": 0.96,
+      "first_hit_rank": 1,
+      "answer_snippet": "**FI\u2011CA \u2013 Contract Accounts Receivable and Payable**  ---  ### 1. Definition   - **FI\u2011CA** stands for **Contract Accounts Receivable and Payable**.   - It is **not** just another version of the classi",
+      "top_chunks": [
+        {
+          "document": "SAP FI-CA.pdf",
+          "page": 3,
+          "section": "Fi-Ca",
+          "score": 0.8143
+        },
+        {
+          "document": "SAP FI-CA.pdf",
+          "page": 1,
+          "section": "1.1 What problem does FI-CA solve?",
+          "score": 0.8131
+        },
+        {
+          "document": "BRIM_AC240_EN_Col16.pdf",
+          "page": 247,
+          "section": "Lesson Overview",
+          "score": 0.801
+        },
+        {
+          "document": "SAP FI-CA.pdf",
+          "page": 25,
+          "section": "Fi-Ca",
+          "score": 0.7974
+        },
+        {
+          "document": "BRIM_AC240_EN_Col16.pdf",
+          "page": 59,
+          "section": "Lesson Overview",
+          "score": 0.7952
+        }
+      ]
+    },
+    {
+      "query": "Explain the end-to-end SAP BRIM billing flow.",
+      "top_score": 0.9843,
+      "grounding_score": 0.9,
+      "supported_claims": 27,
+      "total_claims": 40,
+      "claim_ratio": 0.68,
+      "first_hit_rank": 1,
+      "answer_snippet": "## End\u2011to\u2011End SAP\u202fBRIM Billing Flow    The SAP\u202fBilling and Revenue Innovation Management (BRIM) solution covers the complete **offer\u2011to\u2011cash** (or **consume\u2011to\u2011cash**) process. The flow moves a custom",
+      "top_chunks": [
+        {
+          "document": "BRIM_AC240_EN_Col16.pdf",
+          "page": 21,
+          "section": "Lesson Objectives",
+          "score": 0.9092
+        },
+        {
+          "document": "SAP-PRESS-Catalog-Shop.pdf",
+          "page": 9,
+          "section": "Sap S/4Hana",
+          "score": 0.8943
+        },
+        {
+          "document": "SAP FI-CA.pdf",
+          "page": 27,
+          "section": "Fi-Ca",
+          "score": 0.8326
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 439,
+          "section": "Chapter 7",
+          "score": 0.8082
+        },
+        {
+          "document": "BRIM Q Bank.pdf",
+          "page": 1,
+          "section": "Overview",
+          "score": 0.7992
+        }
+      ]
+    },
+    {
+      "query": "What is a Billable Item?",
+      "top_score": 0.9392,
+      "grounding_score": 0.92,
+      "supported_claims": 28,
+      "total_claims": 30,
+      "claim_ratio": 0.93,
+      "first_hit_rank": 1,
+      "answer_snippet": "## Billable Item \u2013 SAP Convergent Invoicing (CI)  ### 1. Definition   A **billable item** is the SAP CI representation of a **charged (rated) consumption record** that will be invoiced to a customer. ",
+      "top_chunks": [
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 217,
+          "section": "4.3 Configuring SAP Convergent Invoicing",
+          "score": 0.9117
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 223,
+          "section": "4.3 Configuring SAP Convergent Invoicing",
+          "score": 0.8992
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 222,
+          "section": "4 Invoicing",
+          "score": 0.8932
+        },
+        {
+          "document": "BRIM_AC240_EN_Col16.pdf",
+          "page": 289,
+          "section": "Lesson Overview",
+          "score": 0.8931
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 289,
+          "section": "4.4 Using SAP Convergent Invoicing",
+          "score": 0.884
+        }
+      ]
+    },
+    {
+      "query": "What is the relationship between SOM, CC, CI and FI-CA?",
+      "top_score": 0.8644,
+      "grounding_score": 0.88,
+      "supported_claims": 35,
+      "total_claims": 35,
+      "claim_ratio": 1.0,
+      "first_hit_rank": 1,
+      "answer_snippet": "## Relationship Between **SOM**, **CC**, **CI** and **FI\u2011CA**  | Component | Primary Role | Key Master\u2011Data Objects | How It Connects to the Others | |-----------|--------------|----------------------",
+      "top_chunks": [
+        {
+          "document": "SAP FI-CA.pdf",
+          "page": 1,
+          "section": "1.1 What problem does FI-CA solve?",
+          "score": 0.7744
+        },
+        {
+          "document": "SAP FI-CA.pdf",
+          "page": 7,
+          "section": "4.1 Why do we need Contract Accounts?",
+          "score": 0.7705
+        },
+        {
+          "document": "BR234_EN_SOM 2.pdf",
+          "page": 33,
+          "section": "Cc:",
+          "score": 0.724
+        },
+        {
+          "document": "BR234_EN_SOM 2.pdf",
+          "page": 162,
+          "section": "Lesson Objectives",
+          "score": 0.6971
+        },
+        {
+          "document": "BR234_EN_SOM 2.pdf",
+          "page": 47,
+          "section": "Lesson Objectives",
+          "score": 0.6965
+        }
+      ]
+    },
+    {
+      "query": "Find a documented SAP BRIM configuration procedure.",
+      "top_score": 0.7866,
+      "grounding_score": 0.68,
+      "supported_claims": 24,
+      "total_claims": 36,
+      "claim_ratio": 0.67,
+      "first_hit_rank": 1,
+      "answer_snippet": "**Answer \u2013 Documented SAP\u202fBRIM Configuration Procedure**  The material that was retrieved does **not contain a step\u2011by\u2011step configuration procedure** for SAP\u202fBRIM.   What the evidence does provide is ",
+      "top_chunks": [
+        {
+          "document": "mg.pdf",
+          "page": 12,
+          "section": "Public",
+          "score": 0.7109
+        },
+        {
+          "document": "BRIM Q Bank.pdf",
+          "page": 3,
+          "section": "Overview",
+          "score": 0.6864
+        },
+        {
+          "document": "SAP CC.pdf",
+          "page": 16,
+          "section": "Sap S/4Hana Brim",
+          "score": 0.6466
+        },
+        {
+          "document": "BRIM Q Bank.pdf",
+          "page": 4,
+          "section": "Overview",
+          "score": 0.6447
+        },
+        {
+          "document": "SAP CC.pdf",
+          "page": 17,
+          "section": "Public",
+          "score": 0.6369
+        }
+      ]
+    },
+    {
+      "query": "What are the prerequisites for Device as a Service in SAP S/4HANA BRIM SOM?",
+      "top_score": 1.0,
+      "grounding_score": 0.9,
+      "supported_claims": 13,
+      "total_claims": 20,
+      "claim_ratio": 0.65,
+      "first_hit_rank": 4,
+      "answer_snippet": "**Answer \u2013 Prerequisites for \u201cDevice as a Service\u201d (DaS) in SAP\u202fS/4HANA\u202fBRIM\u202fSOM**  The documents that were retrieved contain only high\u2011level references to the *Device as a Service* (DaS) scenario (e.",
+      "top_chunks": [
+        {
+          "document": "SAP CC.pdf",
+          "page": 14,
+          "section": "Sap S/4Hana Brim",
+          "score": 0.8248
+        },
+        {
+          "document": "SAP CC.pdf",
+          "page": 16,
+          "section": "Sap S/4Hana Brim",
+          "score": 0.796
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 481,
+          "section": "Chapter 8",
+          "score": 0.7948
+        },
+        {
+          "document": "2020_S4H_BRIM_SOM_Device_as_a_Service.pdf",
+          "page": 1,
+          "section": "Public",
+          "score": 0.7933
+        },
+        {
+          "document": "SAP BRIM Press Book 2nd Edition - Expertsoft.pdf",
+          "page": 37,
+          "section": "Chapter 2",
+          "score": 0.7891
+        }
+      ]
+    }
+  ],
+  "recalls": {
+    "recall@1": 90.0,
+    "recall@3": 90.0,
+    "recall@5": 100.0,
+    "recall@10": 100.0
+  },
+  "claim_verification": {
+    "supported_claims": 258,
+    "total_claims": 305,
+    "accuracy_ratio": 0.8459
+  },
+  "new_doc_test": [
+    {
+      "query": "What are the prerequisites for Device as a Service in SAP S/4HANA BRIM SOM?",
+      "target": "2020_S4H_BRIM_SOM_Device_as_a_Service.pdf",
+      "top_retrieved": "SAP CC.pdf",
+      "matched_in_top5": true
+    },
+    {
+      "query": "Explain the role of Business Role SAP_S4C_UIU_SOM_REP in SAP S/4HANA authorizations.",
+      "target": "Authorizations-in-S4-HANA-and-Fiori.pdf",
+      "top_retrieved": "Authorizations-in-S4-HANA-and-Fiori.pdf",
+      "matched_in_top5": true
+    },
+    {
+      "query": "What is Budget billing in SAP FI-CA?",
+      "target": "Budget billing.pdf",
+      "top_retrieved": "BRIM Q Bank.pdf",
+      "matched_in_top5": false
+    },
+    {
+      "query": "What is ABAP RESTful Application Programming Model RAP?",
+      "target": "E_Book_ABAP_RESTful_Programming_Model_2020_Rel_NW_wwwERPExamsCom.pdf",
+      "top_retrieved": "SAP_ABAP_Development_and_RAP_Standards.pdf",
+      "matched_in_top5": true
+    },
+    {
+      "query": "Explain RAR contract reversal process in SAP Revenue Accounting and Reporting.",
+      "target": "RAR Contract Reversal Process.pdf",
+      "top_retrieved": "RAR Contract Reversal Process.pdf",
+      "matched_in_top5": true
+    }
+  ],
+  "hallucination_test": [
+    {
+      "query": "What is the exact transaction code for Transfer Credit Data to SAP Credit Management in FI-CA?",
+      "expected": "FPCM1",
+      "status": "PASSED (Correct Anchor 'FPCM1')"
+    },
+    {
+      "query": "Which custom field must be assigned in Customizing for Billable Item Classes relevant for Credit Management?",
+      "expected": "CM_OBJECT_KEY",
+      "status": "Correctly Refused by Guardrail"
+    },
+    {
+      "query": "What is transaction code FPO1 in SAP FI-CA?",
+      "expected": "insufficient",
+      "status": "EVALUATED (Score: 0.82)"
+    },
+    {
+      "query": "What is the fictitious module SAP ULTRA_BRIM_2030?",
+      "expected": "refusal",
+      "status": "EVALUATED (Score: 0.74)"
+    }
+  ],
+  "latencies": {
+    "query_embedding": {
+      "p50": 12.3,
+      "p95": 13.5,
+      "p99": 14.0
+    },
+    "vector_search": {
+      "p50": 8.7,
+      "p95": 9.7,
+      "p99": 10.1
+    },
+    "lexical_scoring": {
+      "p50": 5.8,
+      "p95": 6.5,
+      "p99": 6.7
+    },
+    "reranking": {
+      "p50": 0.2,
+      "p95": 0.3,
+      "p99": 0.3
+    },
+    "llm_generation": {
+      "p50": 16241.6,
+      "p95": 25300.3,
+      "p99": 25797.7
+    },
+    "grounding": {
+      "p50": 37.3,
+      "p95": 54.7,
+      "p99": 56.0
+    },
+    "total_e2e": {
+      "p50": 16301.6,
+      "p95": 25374.0,
+      "p99": 25867.9
+    }
+  }
+}

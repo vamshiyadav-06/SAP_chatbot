@@ -1,4 +1,6 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 
@@ -47,11 +49,26 @@ def query_rag(
         db.commit()
         db.refresh(user_message)
 
-    # 3. Run RAG
+    # 3. Run RAG with chat history if available
+    chat_history = []
+    if chat and user_message:
+        prev_messages = (
+            db.query(Message)
+            .filter(Message.chat_id == chat.id)
+            .filter(Message.id != user_message.id)
+            .order_by(Message.created_at.asc())
+            .all()
+        )
+        chat_history = [
+            {"role": m.role, "content": m.content, "source_type": m.source_type}
+            for m in prev_messages
+        ]
+
     try:
         result = rag_service.process_query(
             db,
-            request.query
+            request.query,
+            chat_history=chat_history
         )
 
     except Exception:
@@ -97,4 +114,73 @@ def query_rag(
         web_sources=result["web_sources"],
         chat_id=chat.id if chat else None,
         message_id=assistant_message_id
+    )
+
+
+@router.post("/query/stream")
+def query_rag_stream(
+    request: RAGQueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat = None
+    if request.chat_id:
+        chat = db.query(Chat).filter(
+            Chat.id == request.chat_id,
+            Chat.user_id == current_user.id
+        ).first()
+
+    if chat:
+        user_message = Message(
+            chat_id=chat.id,
+            role="user",
+            content=request.query
+        )
+        db.add(user_message)
+        db.commit()
+
+    chat_history = []
+    if chat and user_message:
+        prev_messages = (
+            db.query(Message)
+            .filter(Message.chat_id == chat.id)
+            .filter(Message.id != user_message.id)
+            .order_by(Message.created_at.asc())
+            .all()
+        )
+        chat_history = [
+            {"role": m.role, "content": m.content, "source_type": m.source_type}
+            for m in prev_messages
+        ]
+
+    def event_stream():
+        accumulated_text = ""
+        for event in rag_service.stream_query(db, request.query, chat_history=chat_history):
+            if event.get("type") == "token":
+                accumulated_text += event.get("content", "")
+            elif event.get("type") == "done" and chat:
+                full_answer = event.get("answer", accumulated_text)
+                assistant_message = Message(
+                    chat_id=chat.id,
+                    role="assistant",
+                    content=full_answer,
+                    source_type=event.get("source_type", "knowledge_base"),
+                    grounding_score=event.get("grounding_score", 0.0)
+                )
+                db.add(assistant_message)
+                chat.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                db.refresh(assistant_message)
+                event["message_id"] = assistant_message.id
+
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
     )

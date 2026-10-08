@@ -9,3 +9,10 @@ __pycache__/
 node_modules/
 dist/
 build/
+
+# Database files (>100MB, generated via ingest script)
+*.db
+backend/sap_assistant.db
+
+# Large raw training PDF dataset (360MB)
+knowledge_base/the full rag data sap/

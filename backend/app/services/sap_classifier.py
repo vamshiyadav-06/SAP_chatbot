@@ -6,7 +6,9 @@ SAP_CORE_MODULES = {
     "fi", "co", "fico", "mm", "sd", "pp", "qm", "pm", "ps", "hcm", "hr",
     "basis", "abap", "fiori", "s/4hana", "s4hana", "s4", "ecc", "btp",
     "netweaver", "successfactors", "ariba", "concur", "hybris", "c4c",
-    "bw", "bi", "crm", "srm", "ewm", "tm", "grc", "mdg", "solman"
+    "bw", "bi", "crm", "srm", "ewm", "tm", "grc", "mdg", "solman",
+    "brim", "som", "cc", "ci", "fi-ca", "fica", "convergent charging",
+    "convergent invoicing", "subscription order management"
 }
 
 
@@ -28,7 +30,9 @@ SAP_KEYWORDS = {
     "service marketplace", "sap notes", "oss note", "su01", "pfcg",
     "sm50", "sm21", "st22", "st03n", "se11", "se16n", "se38", "se80",
     "me21n", "va01", "fb01", "fb50", "fb60", "migo", "miro", "vl01n",
-    "vf01", "co01"
+    "vf01", "co01", "brim", "convergent charging", "convergent invoicing",
+    "subscription order management", "fi-ca", "fica", "billable item",
+    "consumption item", "provider contract", "invoicing document"
 }
 
 

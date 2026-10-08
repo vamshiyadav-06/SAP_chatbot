@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Loader2, Mic, MicOff } from 'lucide-react';
+import { Send, Mic, MicOff, Square } from 'lucide-react';
 
 interface ChatInputProps {
   onSendMessage: (message: string) => void;
+  onStop?: () => void;
   isLoading: boolean;
 }
 
@@ -16,7 +17,7 @@ declare global {
   }
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isLoading }) => {
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
@@ -196,18 +197,26 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading }
               </button>
             )}
 
-            {/* Send Button */}
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              className="flex items-center justify-center w-8 h-8 rounded-xl bg-sap-600 hover:bg-sap-500 disabled:opacity-40 disabled:hover:bg-sap-600 text-white shadow-md shadow-sap-600/30 transition duration-150 disabled:cursor-not-allowed"
-            >
-              {isLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
+            {/* Send / Stop Button */}
+            {isLoading ? (
+              <button
+                type="button"
+                onClick={onStop}
+                title="Stop generating"
+                className="flex items-center justify-center w-8 h-8 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 transition duration-150 cursor-pointer"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                title="Send message"
+                className="flex items-center justify-center w-8 h-8 rounded-xl bg-sap-600 hover:bg-sap-500 disabled:opacity-40 disabled:hover:bg-sap-600 text-white shadow-md shadow-sap-600/30 transition duration-150 disabled:cursor-not-allowed cursor-pointer"
+              >
                 <Send className="w-4 h-4" />
-              )}
-            </button>
+              </button>
+            )}
           </div>
         </div>
       </form>

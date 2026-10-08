@@ -622,16 +622,161 @@ Instructions:
         source_type: str = "knowledge_base"
     ) -> Generator[str, None, None]:
 
-        full_answer = self.generate_answer(
-            query,
-            evidence,
-            source_type
+        evidence_context = ""
+
+        if source_type == "knowledge_base":
+            evidence_context = "\n\n".join(
+                [
+                    (
+                        f"[Document: {c.get('document_name')}, "
+                        f"Page: {c.get('page_number')}, "
+                        f"Section: {c.get('section')}]\n"
+                        f"{c.get('chunk_text')}"
+                    )
+                    for c in evidence
+                ]
+            )
+
+        elif source_type == "web":
+            evidence_context = "\n\n".join(
+                [
+                    (
+                        f"[Source: {w.get('title')} "
+                        f"- {w.get('domain')}]\n"
+                        f"{w.get('snippet')}"
+                    )
+                    for w in evidence
+                ]
+            )
+
+        # =====================================================
+        # CLOUD LLM STREAMING
+        # =====================================================
+
+        if self.api_key:
+            try:
+                is_xai = self.api_key.startswith("xai-") or "grok" in self.provider
+                is_groq = "groq" in self.provider or self.api_key.startswith("gsk_")
+
+                if is_xai:
+                    from openai import OpenAI
+                    client = OpenAI(
+                        api_key=self.api_key,
+                        base_url="https://api.x.ai/v1"
+                    )
+                    candidate_models = [
+                        settings.LLM_MODEL,
+                        "grok-2",
+                        "grok-2-latest",
+                        "grok-beta"
+                    ]
+                elif is_groq:
+                    from groq import Groq
+                    client = Groq(
+                        api_key=self.api_key
+                    )
+                    candidate_models = [
+                        settings.LLM_MODEL,
+                        "openai/gpt-oss-120b",
+                        "openai/gpt-oss-20b",
+                        "qwen/qwen3.8-27b",
+                        "llama-3.3-70b-versatile",
+                        "llama-3.1-70b-versatile"
+                    ]
+                else:
+                    from openai import OpenAI
+                    client = OpenAI(
+                        api_key=self.api_key
+                    )
+                    candidate_models = [
+                        settings.LLM_MODEL,
+                        "gpt-4o-mini",
+                        "gpt-4o",
+                        "gpt-3.5-turbo"
+                    ]
+
+                unique_models = []
+                for m in candidate_models:
+                    if m and m not in unique_models:
+                        unique_models.append(m)
+
+                user_prompt = f"""USER QUERY:
+{query}
+
+SOURCE TYPE:
+{source_type.upper()}
+
+RETRIEVED EVIDENCE:
+{evidence_context}
+
+TASK:
+Answer the user's question thoroughly, completely, and accurately using ONLY the retrieved evidence above.
+
+Instructions:
+1. Provide a comprehensive, full explanation covering all aspects of the user's question based on the evidence.
+2. Do not cut off, truncate, or prematurely shorten the explanation; present all relevant details, transaction codes, steps, and module definitions in full.
+3. Organize the answer cleanly with clear headings, bullet points, or markdown tables for readability.
+4. Do not invent facts or extrapolate beyond the provided evidence.
+5. If the evidence came from web sources, synthesize a complete answer from the web snippets.
+6. If the evidence is insufficient, state clearly that sufficient information was not available.
+"""
+
+                last_error = None
+                for current_model in unique_models:
+                    try:
+                        logger.info(f"Attempting progressive streaming inference with model: {current_model}")
+                        stream_resp = client.chat.completions.create(
+                            model=current_model,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": SYSTEM_PROMPT
+                                },
+                                {
+                                    "role": "user",
+                                    "content": user_prompt
+                                }
+                            ],
+                            temperature=0.1,
+                            max_tokens=4096,
+                            stream=True
+                        )
+
+                        streamed_any = False
+                        for chunk in stream_resp:
+                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                                streamed_any = True
+                                yield chunk.choices[0].delta.content
+
+                        if streamed_any:
+                            return
+                    except Exception as model_err:
+                        logger.warning(f"Model '{current_model}' streaming error ({model_err}). Trying next candidate...")
+                        last_error = model_err
+                        continue
+
+                if last_error:
+                    logger.warning(f"All cloud LLM streaming models failed ({last_error}). Falling back to local grounded response.")
+
+            except Exception as e:
+                logger.warning(
+                    f"Cloud LLM streaming setup error ({e}). "
+                    "Using local grounded synthesis."
+                )
+
+        # =====================================================
+        # LOCAL FALLBACK STREAMING
+        # =====================================================
+
+        full_answer = self._generate_grounded_local_response(
+            query=query,
+            evidence_text=evidence_context,
+            source_type=source_type,
+            metadata=evidence
         )
 
         words = full_answer.split(" ")
-
         for i, word in enumerate(words):
-
             yield word + (
                 " "
                 if i < len(words) - 1

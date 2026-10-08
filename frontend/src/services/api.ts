@@ -123,23 +123,52 @@ export const apiSendMessage = async (chatId: string, content: string): Promise<M
   return resp.json();
 };
 
+export const apiSavePartialMessage = async (chatId: string, content: string): Promise<void> => {
+  try {
+    await fetch(`${API_BASE_URL}/chats/${chatId}/messages/save-partial`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ content }),
+    });
+  } catch (err) {
+    console.error('Failed to save partial message:', err);
+  }
+};
+
 // SSE Streaming
+export interface StreamStatus {
+  type: 'status';
+  stage: 'thinking' | 'retrieval' | 'reranking' | 'grounding' | 'generation' | string;
+  message: string;
+}
+
 export interface StreamMetadata {
-  message_id: string;
-  source_type: 'knowledge_base' | 'web' | 'refusal' | 'error';
-  grounding_score: number;
-  citations: Citation[];
-  web_sources: WebSource[];
+  message_id?: string;
+  source_type?: 'knowledge_base' | 'web' | 'refusal' | 'error' | 'interrupted';
+  grounding_score?: number;
+  citations?: Citation[];
+  web_sources?: WebSource[];
+  is_in_rag_pipeline?: boolean;
+  kb_score?: number;
+  web_score?: number;
+  winning_score?: number;
+  full_answer?: string;
+}
+
+export interface StreamCallbacks {
+  onStatus?: (status: StreamStatus) => void;
+  onMetadata?: (meta: StreamMetadata) => void;
+  onToken?: (token: string) => void;
+  onDone?: (meta: StreamMetadata, fullAnswer?: string) => void;
+  onError?: (err: any) => void;
 }
 
 export const apiStreamMessage = async (
   chatId: string,
   content: string,
-  onMetadata: (meta: StreamMetadata) => void,
-  onToken: (token: string) => void,
-  onDone: (fullAnswer?: string) => void,
-  onError: (err: any) => void
-) => {
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> => {
   try {
     const resp = await fetch(`${API_BASE_URL}/chats/${chatId}/messages?stream=true`, {
       method: 'POST',
@@ -148,6 +177,7 @@ export const apiStreamMessage = async (
         ...authHeaders(),
       },
       body: JSON.stringify({ content }),
+      signal,
     });
 
     if (!resp.ok) {
@@ -159,43 +189,55 @@ export const apiStreamMessage = async (
 
     const decoder = new TextDecoder();
     let buffer = '';
-
     let isCompleted = false;
     let finalReceivedAnswer: string | undefined = undefined;
+    let lastDoneMeta: StreamMetadata = {};
 
-    const finishStream = (fullAnswer?: string) => {
+    const finishStream = (meta?: StreamMetadata, fullAnswer?: string) => {
       if (!isCompleted) {
         isCompleted = true;
-        onDone(fullAnswer || finalReceivedAnswer);
+        const effectiveMeta = meta || lastDoneMeta;
+        callbacks.onDone?.(effectiveMeta, fullAnswer || finalReceivedAnswer);
       }
     };
 
     const processBlock = (block: string) => {
       const trimmed = block.trim();
       if (!trimmed) return;
-      const eventMatch = trimmed.match(/event:\s*(\w+)/);
-      const dataMatch = trimmed.match(/data:\s*([\s\S]+)$/);
 
-      if (eventMatch && dataMatch) {
-        const eventType = eventMatch[1];
-        const rawData = dataMatch[1].trim();
+      const lines = trimmed.split('\n');
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('data:')) {
+          const rawData = trimmedLine.slice(5).trim();
+          if (!rawData) continue;
 
-        try {
-          const parsed = JSON.parse(rawData);
-          if (eventType === 'metadata') {
-            onMetadata(parsed);
-          } else if (eventType === 'token') {
-            if (parsed.token !== undefined) {
-              onToken(parsed.token);
+          try {
+            const parsed = JSON.parse(rawData);
+
+            if (parsed.type === 'status') {
+              callbacks.onStatus?.(parsed as StreamStatus);
+            } else if (parsed.type === 'token') {
+              const tokenContent = parsed.content ?? parsed.token ?? '';
+              if (tokenContent) {
+                callbacks.onToken?.(tokenContent);
+              }
+            } else if (parsed.type === 'done') {
+              lastDoneMeta = parsed;
+              const ans = parsed.answer || parsed.full_answer;
+              if (ans) {
+                finalReceivedAnswer = ans;
+              }
+              finishStream(parsed, ans);
+            } else if (parsed.type === 'error') {
+              callbacks.onError?.(new Error(parsed.message || 'Generation error occurred'));
+            } else if (parsed.citations !== undefined || parsed.message_id !== undefined) {
+              lastDoneMeta = { ...lastDoneMeta, ...parsed };
+              callbacks.onMetadata?.(parsed);
             }
-          } else if (eventType === 'done') {
-            if (parsed.full_answer) {
-              finalReceivedAnswer = parsed.full_answer;
-            }
-            finishStream(parsed.full_answer);
+          } catch (e) {
+            console.error('SSE JSON parse error:', e, rawData);
           }
-        } catch (e) {
-          console.error('SSE JSON parse error:', e, rawData);
         }
       }
     };
@@ -211,7 +253,6 @@ export const apiStreamMessage = async (
       }
 
       buffer += decoder.decode(value, { stream: true });
-      // Standardize Windows CRLF to standard LF
       const normalized = buffer.replace(/\r\n/g, '\n');
       const blocks = normalized.split('\n\n');
       buffer = blocks.pop() || '';
@@ -220,8 +261,13 @@ export const apiStreamMessage = async (
         processBlock(block);
       }
     }
+
     finishStream();
-  } catch (err) {
-    onError(err);
+  } catch (err: any) {
+    if (signal?.aborted || err?.name === 'AbortError') {
+      console.log('Streaming aborted by user.');
+      return;
+    }
+    callbacks.onError?.(err);
   }
 };
