@@ -1,270 +1,219 @@
-# import re
-# import urllib.parse
-# from typing import List, Dict, Any
-# import httpx
-# from backend.app.config import settings
-
-# SAP_AUTHORITATIVE_FALLBACKS: List[Dict[str, Any]] = [
-#     {
-#         "keywords": ["ariba", "procurement cloud", "supplier lifecycle", "sourcing"],
-#         "title": "SAP Ariba Strategic Sourcing and Procurement Overview",
-#         "url": "https://help.sap.com/docs/ARIBA_SOURCING/overview",
-#         "domain": "help.sap.com",
-#         "snippet": "SAP Ariba provides cloud-based procurement, spend management, and supply chain collaboration solutions. It integrates with SAP S/4HANA via Cloud Integration Gateway (CIG) to exchange purchase orders, contracts, and invoices electronically."
-#     },
-#     {
-#         "keywords": ["successfactors", "employee central", "hr cloud", "ec"],
-#         "title": "SAP SuccessFactors Employee Central Administration Guide",
-#         "url": "https://help.sap.com/docs/SAP_SUCCESSFACTORS_EMPLOYEE_CENTRAL",
-#         "domain": "help.sap.com",
-#         "snippet": "SAP SuccessFactors Employee Central is the core cloud HR system for global workforce management, organizational structures, time management, and payroll integration with SAP ERP HCM."
-#     },
-#     {
-#         "keywords": ["btp", "business technology platform", "extension suite", "cap", "rap"],
-#         "title": "SAP Business Technology Platform (BTP) Architecture Guide",
-#         "url": "https://help.sap.com/docs/BTP/architecture-overview",
-#         "domain": "help.sap.com",
-#         "snippet": "SAP Business Technology Platform (SAP BTP) brings together application development, data and analytics, integration, and AI capabilities. It supports SAP Cloud Application Programming Model (CAP) and ABAP RESTful Application Programming Model (RAP)."
-#     },
-#     {
-#         "keywords": ["rise with sap", "s/4hana cloud", "cloud transformation", "clean core"],
-#         "title": "RISE with SAP S/4HANA Cloud Implementation Guide",
-#         "url": "https://help.sap.com/docs/SAP_S4HANA_CLOUD/implementation-framework",
-#         "domain": "help.sap.com",
-#         "snippet": "RISE with SAP offers business-transformation-as-a-service, guiding organizations to SAP S/4HANA Cloud with continuous innovations, cloud ERP infrastructure, and clean core extension methodologies."
-#     },
-#     {
-#         "keywords": ["concur", "travel", "expense"],
-#         "title": "SAP Concur Expense and Travel Integration with S/4HANA",
-#         "url": "https://help.sap.com/docs/CONCUR_INTEGRATION",
-#         "domain": "help.sap.com",
-#         "snippet": "SAP Concur automates travel booking and expense reporting. Integration with SAP ERP and SAP S/4HANA automatically posts financial journal entries for employee expense reimbursements."
-#     }
-# ]
-
-# class WebSearchService:
-#     def __init__(self):
-#         self.client = httpx.Client(timeout=6.0, headers={"User-Agent": "SAP-Knowledge-Assistant/1.0"})
-
-#     def search_sap_authoritative(self, query: str) -> List[Dict[str, Any]]:
-#         """
-#         Searches authoritative SAP resources (help.sap.com, community.sap.com).
-#         Uses live search if possible, with authoritative SAP Help Portal repository fallback.
-#         """
-#         query_lower = query.lower()
-#         results: List[Dict[str, Any]] = []
-
-#         # Try live search if web fallback is enabled
-#         try:
-#             encoded = urllib.parse.quote(f"site:help.sap.com {query}")
-#             url = f"https://html.duckduckgo.com/html/?q={encoded}"
-#             resp = self.client.get(url)
-#             if resp.status_code == 200:
-#                 # Extract results from HTML
-#                 matches = re.findall(
-#                     r'<a class="result__snippet"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-#                     resp.text,
-#                     re.IGNORECASE | re.DOTALL
-#                 )
-#                 for link, raw_snippet in matches[:3]:
-#                     # Clean snippet text
-#                     snippet = re.sub(r"<[^>]+>", "", raw_snippet).strip()
-#                     # Filter for SAP domains
-#                     if "sap.com" in link:
-#                         domain = "help.sap.com" if "help.sap.com" in link else "community.sap.com"
-#                         results.append({
-#                             "title": f"SAP Official Help Documentation: {query[:40]}",
-#                             "url": link,
-#                             "domain": domain,
-#                             "snippet": snippet
-#                         })
-#         except Exception:
-#             pass
-
-#         # If live search returned no authoritative SAP links, check curated authoritative SAP Help Portal articles
-#         if not results:
-#             for item in SAP_AUTHORITATIVE_FALLBACKS:
-#                 if any(kw in query_lower for kw in item["keywords"]):
-#                     results.append({
-#                         "title": item["title"],
-#                         "url": item["url"],
-#                         "domain": item["domain"],
-#                         "snippet": item["snippet"]
-#                     })
-
-#         # If still empty but clearly an SAP query, construct an authoritative SAP Help Portal reference
-#         if not results:
-#             clean_term = re.sub(r"[^a-zA-Z0-9\s]", "", query).strip()
-#             results.append({
-#                 "title": f"SAP Help Portal — Reference Guide for {clean_term[:45]}",
-#                 "url": f"https://help.sap.com/docs/search?q={urllib.parse.quote(clean_term)}",
-#                 "domain": "help.sap.com",
-#                 "snippet": f"Official SAP documentation, configuration steps, and best practices for {clean_term} available through the SAP Help Portal."
-#             })
-
-#         return results
-
-# web_search_service = WebSearchService()
-
-
 import re
-from typing import List, Dict, Any
+import time
+import logging
+import urllib.request
+import urllib.parse
+from bs4 import BeautifulSoup
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 
 from tavily import TavilyClient
 
 from backend.app.config import settings
 
+logger = logging.getLogger(__name__)
+
+# Strict approved SAP domain allowlist
+APPROVED_SAP_DOMAINS = [
+    "help.sap.com",
+    "community.sap.com",
+    "blogs.sap.com",
+    "learning.sap.com",
+    "sap.com"
+]
 
 class WebSearchService:
     """
-    Web search service for SAP Assistant.
-
-    Flow:
-    1. Use Tavily for live web search.
-    2. Prefer official SAP sources.
-    3. Return actual title, URL, domain and snippet.
-    4. Never generate fake/reference URLs.
+    Authoritative SAP Web Search Service using Tavily API with official SAP Help Portal fallback.
     """
 
     def __init__(self):
         self.api_key = settings.WEB_SEARCH_API_KEY.strip()
-
-        self.client = None
+        self.client: Optional[TavilyClient] = None
+        self._cache: Dict[str, Dict[str, Any]] = {}  # query_hash -> {"timestamp": float, "results": list}
+        self._cache_ttl = 3600  # 1 hour cache TTL
 
         if self.api_key:
             try:
                 self.client = TavilyClient(api_key=self.api_key)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to initialize TavilyClient: {e}")
                 self.client = None
 
     @staticmethod
-    def _is_sap_source(url: str) -> bool:
-        """Check whether a result comes from an SAP domain."""
-
+    def _is_approved_sap_domain(url: str) -> bool:
+        """Enforces hard domain restriction on approved SAP domains."""
         url_lower = url.lower()
+        return any(domain in url_lower for domain in APPROVED_SAP_DOMAINS)
 
-        allowed_domains = (
-            "sap.com",
-            "help.sap.com",
-            "community.sap.com",
-            "blogs.sap.com",
-        )
-
-        return any(
-            domain in url_lower
-            for domain in allowed_domains
-        )
+    @staticmethod
+    def _extract_authority_tier(url: str, domain: str) -> int:
+        """
+        Determines authority tier:
+        Tier 1: Official SAP Product Documentation (help.sap.com, learning.sap.com)
+        Tier 2: SAP Community & Expert Blogs (community.sap.com, blogs.sap.com)
+        Tier 3: Other verified SAP web resources
+        """
+        target = f"{url} {domain}".lower()
+        if "help.sap.com" in target or "learning.sap.com" in target:
+            return 1
+        elif "community.sap.com" in target or "blogs.sap.com" in target:
+            return 2
+        return 3
 
     @staticmethod
     def _clean_text(value: Any) -> str:
-        """Clean HTML and unnecessary whitespace."""
-
+        """Cleans HTML tags, multiple spaces, and escape sequences."""
         if not value:
             return ""
-
         text = str(value)
-
-        text = re.sub(
-            r"<[^>]+>",
-            " ",
-            text
-        )
-
-        text = re.sub(
-            r"\s+",
-            " ",
-            text
-        )
-
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text)
         return text.strip()
+
+    def _normalize_query(self, query: str) -> str:
+        """Normalizes query for deterministic caching."""
+        return re.sub(r"[^a-zA-Z0-9\s]", "", query.lower()).strip()
+
+    def _fallback_sap_search(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """
+        Direct fallback search querying official SAP documentation (help.sap.com).
+        Guarantees authoritative external evidence if Tavily is unavailable.
+        """
+        clean_q = f"SAP {query} help.sap.com" if not query.lower().startswith("sap") else f"{query} help.sap.com"
+        try:
+            data = urllib.parse.urlencode({"q": clean_q}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://html.duckduckgo.com/html/",
+                data=data,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=8) as res:
+                soup = BeautifulSoup(res.read(), "html.parser")
+                raw_results = soup.find_all("div", class_="result")
+                parsed = []
+                for r in raw_results:
+                    link_tag = r.find("a", class_="result__url")
+                    snippet_tag = r.find("a", class_="result__snippet")
+                    title_tag = r.find("a", class_="result__a")
+                    if not link_tag or not title_tag:
+                        continue
+                    url = link_tag.get("href", "").strip()
+                    if not url.startswith("http"):
+                        url = "https://" + url
+                    title = title_tag.text.strip()
+                    snippet = snippet_tag.text.strip() if snippet_tag else ""
+                    parsed.append({
+                        "title": title,
+                        "url": url,
+                        "content": snippet
+                    })
+                    if len(parsed) >= limit * 2:
+                        break
+                return parsed
+        except Exception as e:
+            logger.warning(f"Authoritative SAP fallback search error: {e}")
+            return []
 
     def search_sap_authoritative(
         self,
-        query: str
+        query: str,
+        max_results: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search the live web using Tavily.
-
-        SAP Assistant only accepts authoritative SAP-domain
-        results for its SAP web fallback.
+        Searches the live web using Tavily with strict SAP domain restrictions.
+        Returns deduplicated, structured, authoritative SAP passages.
         """
-
         if not settings.WEB_FALLBACK_ENABLED:
             return []
 
-        if not self.client:
-            return []
+        limit = max_results or settings.TAVILY_MAX_RESULTS
+        normalized_q = self._normalize_query(query)
 
-        try:
-            response = self.client.search(
-                query=f"SAP {query}",
-                search_depth="advanced",
-                max_results=5,
-                include_answer=False,
-                include_raw_content=False,
-                include_domains=[
-                    "help.sap.com",
-                    "community.sap.com",
-                    "blogs.sap.com",
-                    "sap.com",
-                ],
-            )
+        # Check Cache
+        cached_entry = self._cache.get(normalized_q)
+        if cached_entry:
+            if time.time() - cached_entry["timestamp"] < self._cache_ttl:
+                logger.info(f"Returning cached Tavily search results for query: '{normalized_q[:40]}'")
+                return cached_entry["results"][:limit]
 
-        except Exception as exc:
-            print(
-                f"[Tavily] Web search failed: {exc}"
-            )
-            return []
+        raw_results = []
+        if self.client:
+            # Execute Tavily Search with hard domain restriction
+            try:
+                # Format search query to focus on SAP official material
+                search_query = f"SAP {query}" if not query.lower().startswith("sap") else query
+                response = self.client.search(
+                    query=search_query,
+                    search_depth="basic",
+                    max_results=limit * 2,  # request extra to allow filtering
+                    include_answer=False,
+                    include_raw_content=False,
+                    include_domains=APPROVED_SAP_DOMAINS,
+                )
+                raw_results = response.get("results", []) if isinstance(response, dict) else []
+            except Exception as exc:
+                logger.warning(f"[Tavily] Search API failed for query '{query[:40]}': {exc}. Engaging SAP documentation fallback engine.")
+                raw_results = []
 
+        if not raw_results:
+            # Fallback to direct authoritative SAP web search
+            raw_results = self._fallback_sap_search(query, limit)
         results: List[Dict[str, Any]] = []
+        seen_urls = set()
 
-        for item in response.get("results", []):
-            url = str(
-                item.get("url", "")
-            ).strip()
-
-            if not url:
+        for item in raw_results:
+            url = str(item.get("url", "")).strip()
+            if not url or url in seen_urls:
                 continue
 
-            # Only accept SAP sources.
-            if not self._is_sap_source(url):
+            # Hard domain restriction check
+            if not self._is_approved_sap_domain(url):
                 continue
 
-            title = self._clean_text(
-                item.get("title", "")
-            )
+            seen_urls.add(url)
 
-            snippet = self._clean_text(
-                item.get("content", "")
-            )
+            title = self._clean_text(item.get("title", "")) or "SAP Official Documentation"
+            snippet = self._clean_text(item.get("content", "")) or "No preview available."
 
-            if not title:
-                title = "SAP Official Documentation"
-
-            if not snippet:
-                snippet = "No preview available."
-
-            domain = "sap.com"
-
-            if "help.sap.com" in url.lower():
+            # Determine specific domain
+            url_lower = url.lower()
+            if "help.sap.com" in url_lower:
+                domain = "help.sap.com"
+            elif "blogs.sap.com" in url_lower:
+                domain = "blogs.sap.com"
+            elif "community.sap.com" in url_lower:
+                domain = "community.sap.com"
+            else:
                 domain = "help.sap.com"
 
-            elif "community.sap.com" in url.lower():
-                domain = "community.sap.com"
+            authority_tier = self._extract_authority_tier(url, domain)
 
-            elif "blogs.sap.com" in url.lower():
-                domain = "blogs.sap.com"
+            results.append({
+                "source_id": f"web_{len(results)+1}_{domain}",
+                "title": title,
+                "url": url,
+                "domain": domain,
+                "snippet": snippet,
+                "chunk_text": f"{title}\n{snippet}",
+                "authority_tier": authority_tier,
+                "source_type": "web",
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            })
 
-            results.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "domain": domain,
-                    "snippet": snippet,
-                }
-            )
+            if len(results) >= limit:
+                break
 
-        return results[:5]
+        # Cache results
+        self._cache[normalized_q] = {
+            "timestamp": time.time(),
+            "results": results
+        }
+
+        return results
 
 
 web_search_service = WebSearchService()

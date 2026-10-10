@@ -146,10 +146,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
 
       <form
         onSubmit={handleSubmit}
-        className={`relative bg-slate-900/90 border rounded-2xl shadow-2xl transition-all duration-200 ${
+        className={`relative bg-white dark:bg-[#09090e] border rounded-2xl shadow-sm dark:shadow-2xl transition-all duration-200 ${
           isListening
             ? 'border-rose-500/70 ring-2 ring-rose-500/25'
-            : 'border-slate-700/80 focus-within:border-sap-500/80 focus-within:ring-2 focus-within:ring-sap-500/20'
+            : 'border-slate-300 dark:border-[#1f1f2c] focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20 focus-within:shadow-md'
         }`}
       >
         <textarea
@@ -160,7 +160,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
           placeholder={isListening ? 'Listening... speak now' : 'Ask anything about SAP...'}
           rows={1}
           disabled={isLoading}
-          className="w-full bg-transparent text-slate-100 placeholder-slate-500 text-sm px-4 pt-3.5 pb-12 focus:outline-none resize-none max-h-48 min-h-[52px]"
+          className="w-full bg-transparent text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 text-sm px-4 pt-3.5 pb-12 focus:outline-none resize-none max-h-48 min-h-[52px]"
         />
 
         <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between">
@@ -186,7 +186,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                 className={`flex items-center justify-center w-8 h-8 rounded-xl transition duration-150 disabled:opacity-40 disabled:cursor-not-allowed ${
                   isListening
                     ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 animate-pulse'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
+                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                 }`}
               >
                 {isListening ? (
@@ -212,7 +212,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                 type="submit"
                 disabled={!input.trim()}
                 title="Send message"
-                className="flex items-center justify-center w-8 h-8 rounded-xl bg-sap-600 hover:bg-sap-500 disabled:opacity-40 disabled:hover:bg-sap-600 text-white shadow-md shadow-sap-600/30 transition duration-150 disabled:cursor-not-allowed cursor-pointer"
+                className="flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 disabled:opacity-40 disabled:hover:from-orange-600 disabled:hover:to-orange-500 text-white shadow-md shadow-orange-500/30 transition duration-150 disabled:cursor-not-allowed cursor-pointer"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -222,10 +222,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
       </form>
 
       <div className="text-center mt-2">
-        <span className="text-[11px] text-slate-500">
+        <span className="text-[11px] text-slate-400 dark:text-slate-500">
           SAP Knowledge Assistant grounded in verified enterprise documentation. Non-SAP queries are rejected.
         </span>
       </div>
+
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, Share2, Globe, Shield } from 'lucide-react';
+import { X, Copy, Check, Share2, Globe } from 'lucide-react';
 import type { Chat } from '../../types';
 
 interface ShareModalProps {
@@ -95,7 +95,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ chat, isOpen, onClose })
 
         {/* Footer Note */}
         <div className="pt-3 border-t border-slate-800 flex items-center gap-2 text-[11px] text-slate-500">
-          <Shield className="w-3.5 h-3.5 text-sap-400 shrink-0" />
+          <Globe className="w-3.5 h-3.5 text-orange-400 shrink-0" />
           <span>Anyone with this link will have view-only access to this conversation.</span>
         </div>
       </div>

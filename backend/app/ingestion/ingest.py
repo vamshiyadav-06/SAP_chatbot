@@ -28,7 +28,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
 def discover_knowledge_base_files() -> List[Path]:
     """
     Recursively scans the knowledge base directories to find all supported documents.
-    Covers both settings.KNOWLEDGE_BASE_DIR and settings.DOCUMENTS_DIR.
+    Covers KNOWLEDGE_BASE_DIR, DOCUMENTS_DIR, and FULL_RAG_DATA_DIR (14 SAP PDFs).
     """
     search_dirs = []
     if hasattr(settings, "KNOWLEDGE_BASE_DIR") and settings.KNOWLEDGE_BASE_DIR.exists():
@@ -36,6 +36,11 @@ def discover_knowledge_base_files() -> List[Path]:
     if hasattr(settings, "DOCUMENTS_DIR") and settings.DOCUMENTS_DIR.exists():
         if settings.DOCUMENTS_DIR not in search_dirs:
             search_dirs.append(settings.DOCUMENTS_DIR)
+    # Include the "the full rag data sap" directory with all 14 SAP PDF documents
+    if hasattr(settings, "FULL_RAG_DATA_DIR") and settings.FULL_RAG_DATA_DIR.exists():
+        if settings.FULL_RAG_DATA_DIR not in search_dirs:
+            search_dirs.append(settings.FULL_RAG_DATA_DIR)
+            logger.info(f"Including FULL_RAG_DATA_DIR: {settings.FULL_RAG_DATA_DIR}")
 
     discovered_files: Dict[str, Path] = {}
 

@@ -17,8 +17,13 @@ class MessageResponse(BaseModel):
     kb_score: Optional[float] = None
     web_score: Optional[float] = None
     winning_score: Optional[float] = None
+    verification_status: Optional[str] = "verified"
+    internal_evidence_confidence: Optional[float] = None
+    selected_evidence_quality: Optional[float] = None
+    external_search_used: Optional[bool] = False
     created_at: datetime
     citations: List[CitationResponse] = []
     web_sources: List[WebSourceResponse] = []
+    follow_up_questions: List[str] = []
 
     model_config = ConfigDict(from_attributes=True)

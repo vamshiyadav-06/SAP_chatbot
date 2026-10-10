@@ -68,7 +68,8 @@ def query_rag(
         result = rag_service.process_query(
             db,
             request.query,
-            chat_history=chat_history
+            chat_history=chat_history,
+            user=current_user
         )
 
     except Exception:
@@ -110,8 +111,14 @@ def query_rag(
         web_score=result.get("web_score"),
         winning_score=result.get("winning_score"),
         selected_source=result.get("selected_source"),
+        verification_status=result.get("verification_status", "verified"),
+        internal_evidence_confidence=result.get("internal_evidence_confidence"),
+        selected_evidence_quality=result.get("selected_evidence_quality"),
+        external_search_used=result.get("external_search_used", False),
         citations=result["citations"],
         web_sources=result["web_sources"],
+        follow_up_questions=result.get("follow_up_questions", []),
+        selection_summary=result.get("selection_summary"),
         chat_id=chat.id if chat else None,
         message_id=assistant_message_id
     )
@@ -155,7 +162,7 @@ def query_rag_stream(
 
     def event_stream():
         accumulated_text = ""
-        for event in rag_service.stream_query(db, request.query, chat_history=chat_history):
+        for event in rag_service.stream_query(db, request.query, chat_history=chat_history, user=current_user):
             if event.get("type") == "token":
                 accumulated_text += event.get("content", "")
             elif event.get("type") == "done" and chat:

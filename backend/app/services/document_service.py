@@ -112,6 +112,31 @@ class DocumentService:
             "title": "SAP BRIM Master Guide: Solution Landscapes & Implementation Strategy",
             "module": "BRIM Architecture",
             "product": "SAP BRIM"
+        },
+        "SAP_BRIM_CC_Convergent_Charging_Advanced_Architecture.pdf": {
+            "title": "SAP Convergent Charging (CC) Advanced Architecture & Implementation Guide",
+            "module": "CC / BRIM",
+            "product": "SAP Convergent Charging"
+        },
+        "SAP_BRIM_FICA_Contract_Accounts_Master_Handbook.pdf": {
+            "title": "SAP Contract Accounts Receivable and Payable (FI-CA) Master Configuration & Architecture Guide",
+            "module": "FI-CA / BRIM",
+            "product": "SAP FI-CA"
+        },
+        "SAP_BRIM_Convergent_Invoicing_CIT_BIT_Master_Architecture.pdf": {
+            "title": "SAP Convergent Invoicing (CI) Consumption & Billable Item Management Master Guide",
+            "module": "CI / BRIM",
+            "product": "SAP Convergent Invoicing"
+        },
+        "SAP_BRIM_SOM_Subscription_Order_Management_Master_Guide.pdf": {
+            "title": "SAP Subscription Order Management (SOM) Master Configuration & Order Distribution Guide",
+            "module": "SOM / BRIM",
+            "product": "SAP S/4HANA BRIM"
+        },
+        "SAP_BRIM_End_to_End_Integration_and_SPRO_Cookbook.pdf": {
+            "title": "SAP BRIM End-to-End Integration, SPRO Customizing Cookbook & War-Room Guide",
+            "module": "BRIM End-to-End",
+            "product": "SAP BRIM"
         }
     }
 

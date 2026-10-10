@@ -19,18 +19,20 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
     # First registered user can optionally be an admin
     user_count = db.query(User).count()
     is_first_user = (user_count == 0)
+    user_role = "admin" if is_first_user else (user_in.role or "consultant")
 
     new_user = User(
         email=user_in.email.lower(),
         name=user_in.name.strip(),
         password_hash=hash_password(user_in.password),
         is_admin=is_first_user,
+        role=user_role,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    access_token = create_access_token(data={"sub": new_user.id, "email": new_user.email})
+    access_token = create_access_token(data={"sub": new_user.id, "email": new_user.email, "role": new_user.role})
     return Token(
         access_token=access_token,
         token_type="bearer",
@@ -47,7 +49,30 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access_token = create_access_token(data={"sub": user.id, "email": user.email})
+    access_token = create_access_token(data={"sub": user.id, "email": user.email, "role": user.role})
+    return Token(
+        access_token=access_token,
+        token_type="bearer",
+        user=UserResponse.model_validate(user)
+    )
+
+@router.post("/demo", response_model=Token)
+def demo_login(db: Session = Depends(get_db)):
+    demo_email = "consultant@clyptusap.ai"
+    user = db.query(User).filter(User.email == demo_email).first()
+    if not user:
+        user = User(
+            email=demo_email,
+            name="SAP Consultant",
+            password_hash=hash_password("clyptusDemo2026!"),
+            is_admin=False,
+            role="consultant",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    access_token = create_access_token(data={"sub": user.id, "email": user.email, "role": user.role})
     return Token(
         access_token=access_token,
         token_type="bearer",

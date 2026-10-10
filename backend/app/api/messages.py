@@ -127,10 +127,10 @@ def send_message(
 
     # 2. Check SSE streaming flow
     if stream:
-        return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history)
+        return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user)
 
-    # 3. Synchronous RAG flow
-    rag_result = rag_service.process_query(db, msg_in.content.strip(), chat_history=chat_history)
+    # 3. Synchronous RAG flow with enterprise security
+    rag_result = rag_service.process_query(db, msg_in.content.strip(), chat_history=chat_history, user=current_user)
 
     # 4. Save assistant message
     assistant_msg = Message(
@@ -186,6 +186,10 @@ def send_message(
         kb_score=rag_result.get("kb_score"),
         web_score=rag_result.get("web_score"),
         winning_score=rag_result.get("winning_score"),
+        verification_status=rag_result.get("verification_status", "verified"),
+        internal_evidence_confidence=rag_result.get("internal_evidence_confidence"),
+        selected_evidence_quality=rag_result.get("selected_evidence_quality"),
+        external_search_used=rag_result.get("external_search_used", False),
         created_at=assistant_msg.created_at,
         citations=[
             {
@@ -207,7 +211,8 @@ def send_message(
                 "snippet": w.snippet
             }
             for w in assistant_msg.web_sources
-        ]
+        ],
+        follow_up_questions=rag_result.get("follow_up_questions", [])
     )
 
 
@@ -249,7 +254,7 @@ def send_message_stream(
         for m in prev_messages
     ]
 
-    return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history)
+    return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user)
 
 
 @router.post("/save-partial")
@@ -275,7 +280,13 @@ def save_partial_message(
     return {"status": "saved", "message_id": partial_msg.id}
 
 
-def handle_streaming_response(chat_id: str, query: str, db: Session = None, chat_history: List[Dict[str, Any]] = None):
+def handle_streaming_response(
+    chat_id: str,
+    query: str,
+    db: Session = None,
+    chat_history: List[Dict[str, Any]] = None,
+    current_user: User = None
+):
     """
     Generates Server-Sent Events (SSE) stream using the complete verified RAG pipeline.
     Progressively yields structured status stages, LLM token stream, and done event with citations/grounding.
@@ -301,7 +312,7 @@ def handle_streaming_response(chat_id: str, query: str, db: Session = None, chat
                 hist.append({"role": m.role, "content": m.content, "source_type": m.source_type})
 
         try:
-            for event in rag_service.stream_query(save_db, query, chat_history=hist):
+            for event in rag_service.stream_query(save_db, query, chat_history=hist, user=current_user):
                 event_type = event.get("type")
 
                 if event_type == "token":

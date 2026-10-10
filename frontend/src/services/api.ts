@@ -46,6 +46,18 @@ export const apiLogin = async (email: string, password: string) => {
   return resp.json();
 };
 
+export const apiDemoLogin = async () => {
+  const resp = await fetch(`${API_BASE_URL}/auth/demo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!resp.ok) {
+    const errorData = await resp.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Demo login failed');
+  }
+  return resp.json();
+};
+
 export const apiGetMe = async (): Promise<User> => {
   const resp = await fetch(`${API_BASE_URL}/auth/me`, {
     headers: { ...authHeaders() },
@@ -144,7 +156,7 @@ export interface StreamStatus {
 
 export interface StreamMetadata {
   message_id?: string;
-  source_type?: 'knowledge_base' | 'web' | 'refusal' | 'error' | 'interrupted';
+  source_type?: 'knowledge_base' | 'web' | 'combined' | 'refusal' | 'error' | 'interrupted';
   grounding_score?: number;
   citations?: Citation[];
   web_sources?: WebSource[];
@@ -152,6 +164,11 @@ export interface StreamMetadata {
   kb_score?: number;
   web_score?: number;
   winning_score?: number;
+  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention';
+  internal_evidence_confidence?: number;
+  selected_evidence_quality?: number;
+  external_search_used?: boolean;
+  follow_up_questions?: string[];
   full_answer?: string;
 }
 

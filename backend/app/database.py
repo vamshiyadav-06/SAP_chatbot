@@ -50,6 +50,22 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables initialized successfully.")
 
+    # Lightweight migration: Ensure role column exists on users table
+    try:
+        with engine.connect() as conn:
+            if engine.dialect.name == "sqlite":
+                cols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+                if "role" not in cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'consultant'"))
+                    conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = 1"))
+                    conn.commit()
+            elif engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'consultant'"))
+                conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = true AND (role IS NULL OR role = 'consultant')"))
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Could not verify or migrate users.role column: {e}")
+
     if engine.dialect.name == "postgresql":
         try:
             with engine.connect() as conn:

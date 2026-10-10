@@ -32,9 +32,26 @@ SAP_KEYWORDS = {
     "me21n", "va01", "fb01", "fb50", "fb60", "migo", "miro", "vl01n",
     "vf01", "co01", "brim", "convergent charging", "convergent invoicing",
     "subscription order management", "fi-ca", "fica", "billable item",
-    "consumption item", "provider contract", "invoicing document"
+    "consumption item", "provider contract", "invoicing document",
+    "billable items", "consumption items", "provider contracts",
+    "bit", "cit", "fpt3", "fpt4", "fpva", "fpvb", "fpcpl",
+    "fkk_invoicing", "fkkbi", "fpy1", "fpy2", "charge plan",
+    "pricing macro", "subscriber account", "contract account",
+    "business partner", "master agreement", "sharing contract"
 }
 
+SENTIMENTAL_AND_GREETING_PATTERNS = [
+    r"^(hi+|hey+|hello+|howdy|hola|namaste|greetings)\b",
+    r"^(good\s+(morning|afternoon|evening|night|day))\b",
+    r"\b(how\s+are\s+you|how're\s+you|how\s+is\s+it\s+going|how\s+do\s+you\s+feel)\b",
+    r"\b(who\s+are\s+you|what\s+is\s+your\s+name|what's\s+your\s+name|introduce\s+yourself)\b",
+    r"\b(what\s+can\s+you\s+do|what\s+do\s+you\s+do|tell\s+me\s+about\s+yourself)\b",
+    r"\b(tell\s+me\s+a\s+joke|make\s+me\s+laugh|sing\s+a\s+song|write\s+a\s+story|write\s+a\s+poem)\b",
+    r"\b(thank\s+you|thanks|thx|thank\s+u)\b",
+    r"\b(bye|goodbye|see\s+you|cya)\b",
+    r"\b(i\s+love\s+you|i\s+hate\s+you|do\s+you\s+love\s+me|are\s+you\s+(happy|sad|real|human|ai|bot))\b",
+    r"^(ok|okay|cool|nice|great|awesome|fine|alright|sure)\b",
+]
 
 GENERAL_UNRELATED_PATTERNS = [
     r"\b(cricket|football|soccer|basketball|baseball|tennis|olympics|ipl)\b",
@@ -82,11 +99,10 @@ class SAPClassifier:
         text = query.strip().lower()
 
         if not text:
-            return False, "Query cannot be empty."
+            return False, "I can only help with SAP and SAP-related topics. Query cannot be empty."
 
-        # Explicit SAP mention always qualifies.
-        if cls._contains_term(text, "sap"):
-            return True, "sap_domain_verified"
+        # Check for explicit SAP mention first
+        has_sap_direct = cls._contains_term(text, "sap")
 
         # Match SAP keywords using whole-term matching.
         has_sap_keyword = any(
@@ -105,7 +121,8 @@ class SAPClassifier:
         has_tcode_pattern = bool(
             re.search(
                 r"\b(?:me21n|va01|fb01|fb50|fb60|migo|miro|vl01n|vf01|"
-                r"co01|su01|pfcg|sm50|sm21|st22|st03n|se11|se16n|se38|se80)\b",
+                r"co01|su01|pfcg|sm50|sm21|st22|st03n|se11|se16n|se38|se80|"
+                r"fpt3|fpt4|fpva|fpvb|fpcpl|fpy1|fpy2)\b",
                 text,
                 re.IGNORECASE
             )
@@ -115,7 +132,8 @@ class SAPClassifier:
         common_tables = {
             "mara", "marc", "mard", "bseg", "bkpf",
             "ekko", "ekpo", "vbak", "vbap",
-            "kna1", "lfa1", "t001"
+            "kna1", "lfa1", "t001", "acdoca",
+            "dfkkop", "dfkkbpt", "fkkvkp"
         }
 
         has_sap_table = any(
@@ -123,20 +141,28 @@ class SAPClassifier:
             for table in common_tables
         )
 
-        if (
-            has_sap_keyword
+        is_sap_query = (
+            has_sap_direct
+            or has_sap_keyword
             or has_sap_module
             or has_tcode_pattern
             or has_sap_table
-        ):
+        )
+
+        if is_sap_query:
             return True, "sap_domain_verified"
 
-        # Explicitly known unrelated questions.
+        # Explicitly reject sentimental questions & greetings without SAP context
+        for pattern in SENTIMENTAL_AND_GREETING_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return False, "I can only help with SAP and SAP-related topics. Please ask an SAP or SAP BRIM technical question."
+
+        # Explicitly known unrelated questions
         for pattern in GENERAL_UNRELATED_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
                 return False, "I can only help with SAP and SAP-related topics."
 
-        # Everything without SAP context is rejected.
+        # Everything else without SAP context is rejected
         return False, "I can only help with SAP and SAP-related topics."
 
 

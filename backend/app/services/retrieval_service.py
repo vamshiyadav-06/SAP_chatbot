@@ -91,10 +91,12 @@ class RetrievalService:
         query: str,
         top_k: Optional[int] = None,
         document_filter: Optional[str] = None,
+        **kwargs
     ) -> List[Dict[str, Any]]:
-        """Hybrid retrieval using vector similarity and lexical matching with robust fallback across SQLite and PostgreSQL."""
+        """Hybrid retrieval using vector similarity and lexical matching across all indexed documents."""
         k = top_k or settings.TOP_K
         processed_query = self.preprocess_query(query)
+
         query_vector_list = embedding_service.embed_text(processed_query)
         query_vector = np.array(query_vector_list, dtype=np.float32)
         q_norm = float(np.linalg.norm(query_vector))
@@ -110,6 +112,7 @@ class RetrievalService:
                 vec_q = db.query(DocumentChunk)
                 if document_filter:
                     vec_q = vec_q.filter(DocumentChunk.document_name == document_filter)
+
                 vec_hits = (
                     vec_q.order_by(DocumentChunk.embedding.op("<=>")(query_vector_list))
                     .limit(k * 2)
@@ -125,6 +128,7 @@ class RetrievalService:
                 )
                 if document_filter:
                     lex_q = lex_q.filter(DocumentChunk.document_name == document_filter)
+
                 lex_hits = (
                     lex_q.filter(func.to_tsvector("english", DocumentChunk.chunk_text).op("@@")(func.plainto_tsquery("english", processed_query)))
                     .order_by(desc("lex_score"))
@@ -184,8 +188,8 @@ class RetrievalService:
         normalized_sims = np.clip((sims + 1.0) / 2.0, 0.0, 1.0)
 
         # Pre-select top candidates by vector similarity + full scan for keyword boost
-        # For fast execution, take top 100 vector hits
-        top_vec_indices = np.argsort(-normalized_sims)[:min(120, len(cached_meta))]
+        # For fast execution, take top candidates
+        top_vec_indices = np.argsort(-normalized_sims)[:min(150, len(cached_meta))]
 
         scored_candidates: List[Dict[str, Any]] = []
         for idx in top_vec_indices:

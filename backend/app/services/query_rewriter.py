@@ -35,7 +35,30 @@ class QueryRewriter:
 
         q = query.strip().lower()
 
-        # 1. Unrelated non-SAP queries (Never rewrite or force SAP into these!)
+        # 1. Sentimental questions, greetings, and chit-chat (Never rewrite as follow-up!)
+        greeting_patterns = [
+            r"^(hi+|hey+|hello+|howdy|hola|namaste|greetings)\b",
+            r"^(good\s+(morning|afternoon|evening|night|day))\b",
+            r"\b(how\s+are\s+you|how're\s+you|how\s+is\s+it\s+going|how\s+do\s+you\s+feel)\b",
+            r"\b(who\s+are\s+you|what\s+is\s+your\s+name|what's\s+your\s+name)\b",
+            r"\b(what\s+can\s+you\s+do|tell\s+me\s+about\s+yourself)\b",
+            r"\b(thank\s+you|thanks|thx|thank\s+u)\b",
+            r"\b(bye|goodbye|see\s+you|cya)\b",
+            r"\b(love\s+you|hate\s+you|are\s+you\s+(happy|sad|real|human|ai|bot))\b",
+            r"^(ok|okay|cool|nice|great|awesome|fine|alright|sure)\b",
+        ]
+        sap_mentions = [
+            "sap", "brim", "convergent", "charging", "invoicing", "fi-ca", "fica",
+            "som", "hana", "bapi", "idoc", "abap", "fiori", "billable item", "bit", "cit",
+            "provider contract", "consumption item", "tcode", "t-code", "table"
+        ]
+        has_sap = any(t in q for t in sap_mentions)
+
+        for pat in greeting_patterns:
+            if re.search(pat, q, re.IGNORECASE) and not has_sap:
+                return False, "sentimental_or_greeting"
+
+        # 2. Unrelated non-SAP queries (Never rewrite or force SAP into these!)
         unrelated_patterns = [
             r"\b(weather|temperature|rain|forecast)\b",
             r"\b(joke|funny|riddle)\b",
@@ -45,16 +68,11 @@ class QueryRewriter:
             r"\b(python|javascript|typescript|c\+\+|java|golang|rust|php|ruby)\b",
             r"\b(elon musk|donald trump|biden|modi)\b"
         ]
-        sap_mentions = [
-            "sap", "brim", "convergent", "charging", "invoicing", "fi-ca", "fica",
-            "som", "hana", "bapi", "idoc", "abap", "fiori", "billable item", "bit", "cit"
-        ]
-        has_sap = any(t in q for t in sap_mentions)
         for pat in unrelated_patterns:
             if re.search(pat, q, re.IGNORECASE) and not has_sap:
                 return False, "unrelated_standalone"
 
-        # 2. Short contextual query triggers
+        # 3. Short contextual query triggers
         short_followup_triggers = [
             r"^can you explain in detail",
             r"^explain in detail",
@@ -84,7 +102,7 @@ class QueryRewriter:
             if re.search(trigger, q, re.IGNORECASE):
                 return True, "short_contextual_query"
 
-        # 3. Pronoun / anaphoric reference triggers
+        # 4. Pronoun / anaphoric reference triggers
         pronoun_patterns = [
             r"\b(does|can|is|will|how|what|why|where)\s+it\b",
             r"\b(what|how|why)\s+(does|is)\s+this\b",
@@ -104,17 +122,24 @@ class QueryRewriter:
             if re.search(pat, q, re.IGNORECASE):
                 return True, "pronoun_reference"
 
-        # 4. Short queries (< 6 words) without explicit SAP subject
-        words = q.split()
-        if len(words) <= 5 and not has_sap:
+        # 5. Short queries (< 6 words) with explicit continuation or anaphoric intent
+        continuation_keywords = {
+            "it", "this", "that", "its", "why", "how", "more", "next", "after",
+            "steps", "step", "example", "prerequisites", "prerequisite", "transactions",
+            "transaction", "tcodes", "tcode", "tables", "table", "process", "detail",
+            "details", "configuration", "configured", "integrate", "integration", "benefits",
+            "limitations", "difference", "compare"
+        }
+        word_tokens = set(re.findall(r"\b\w+\b", q))
+        if len(q.split()) <= 5 and not has_sap and (word_tokens & continuation_keywords):
             return True, "short_elliptical_query"
 
-        # 5. Queries with ambiguous references like "after rating", "integrate with CI"
+        # 6. Queries with ambiguous references like "after rating", "integrate with CI"
         if ("after rating" in q or "with ci" in q or "with cc" in q) and not ("sap convergent" in q):
             return True, "ambiguous_abbreviation_or_phase"
 
-        # 6. Standalone SAP query (do not over-rewrite)
-        if has_sap and not any(p in words for p in ["it", "this", "that", "its"]):
+        # 7. Standalone SAP query (do not over-rewrite)
+        if has_sap and not any(p in word_tokens for p in ["it", "this", "that", "its"]):
             return False, "standalone_sap"
 
         return False, "default_standalone"
@@ -130,6 +155,10 @@ class QueryRewriter:
             if not content:
                 continue
 
+            # Skip rejected/refusal messages
+            if msg.get("source_type") == "refusal":
+                continue
+
             if msg.get("role") == "user":
                 # Clean prompt prefixes
                 clean = re.sub(
@@ -139,8 +168,8 @@ class QueryRewriter:
                     flags=re.IGNORECASE
                 )
                 clean = clean.rstrip("?.,!").strip()
-                # Ignore generic meta queries
-                if len(clean) > 3 and not any(clean.lower().startswith(w) for w in ["explain in detail", "tell me more", "how it"]):
+                # Ignore generic meta queries and greetings
+                if len(clean) > 3 and not any(clean.lower().startswith(w) for w in ["explain in detail", "tell me more", "how it", "hi", "hello", "why"]):
                     return clean
 
             if msg.get("role") == "assistant":
@@ -148,10 +177,10 @@ class QueryRewriter:
                 heading_match = re.search(r"##\s*([^\n]+)", content)
                 if heading_match:
                     h = heading_match.group(1).replace("Overview", "").strip(" -–:")
-                    if len(h) > 3 and not any(w in h.lower() for w in ["integration", "summary"]):
+                    if len(h) > 3 and not any(w in h.lower() for w in ["integration", "summary", "guardrail"]):
                         return h
 
-        return "SAP"
+        return "SAP BRIM"
 
     def rewrite_heuristic(self, query: str, topic: str) -> str:
         """

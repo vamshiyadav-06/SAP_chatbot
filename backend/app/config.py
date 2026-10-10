@@ -28,10 +28,12 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "sap-admin-dev-secret-key-999")
 
     # LLM Settings
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")  # openai, groq, or local
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openrouter")  # openrouter, groq, openai, or local
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
     # Embedding & RAG parameters
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
@@ -41,6 +43,13 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.60"))
     GROUNDING_THRESHOLD: float = float(os.getenv("GROUNDING_THRESHOLD", "0.65"))
 
+    # Evidence Confidence & Grounding Verification Settings (v2)
+    INTERNAL_EVIDENCE_THRESHOLD: float = float(os.getenv("INTERNAL_EVIDENCE_THRESHOLD", "0.70"))
+    ANSWER_GROUNDING_THRESHOLD: float = float(os.getenv("ANSWER_GROUNDING_THRESHOLD", "0.80"))
+    MAX_GROUNDING_REPAIR_ATTEMPTS: int = int(os.getenv("MAX_GROUNDING_REPAIR_ATTEMPTS", "1"))
+    FOLLOWUP_QUESTION_COUNT: int = int(os.getenv("FOLLOWUP_QUESTION_COUNT", "3"))
+    TAVILY_MAX_RESULTS: int = int(os.getenv("TAVILY_MAX_RESULTS", "5"))
+
     # Web Fallback
     WEB_FALLBACK_ENABLED: bool = os.getenv("WEB_FALLBACK_ENABLED", "True").lower() in ("true", "1")
     WEB_SEARCH_API_KEY: str = os.getenv("WEB_SEARCH_API_KEY", "")
@@ -48,6 +57,8 @@ class Settings(BaseSettings):
     # Canonical Knowledge Base Paths (at repo root if exists, otherwise backend)
     KNOWLEDGE_BASE_DIR: Path = (ROOT_DIR / "knowledge_base") if (ROOT_DIR / "knowledge_base").exists() else (BASE_DIR / "knowledge_base")
     DOCUMENTS_DIR: Path = (ROOT_DIR / "knowledge_base" / "documents") if (ROOT_DIR / "knowledge_base" / "documents").exists() else (BASE_DIR / "knowledge_base" / "documents")
+    # "The full rag data sap" directory with all 14 PDF documents
+    FULL_RAG_DATA_DIR: Path = (ROOT_DIR / "knowledge_base" / "the full rag data sap") if (ROOT_DIR / "knowledge_base" / "the full rag data sap").exists() else (BASE_DIR / "knowledge_base" / "the full rag data sap")
 
     model_config = SettingsConfigDict(
         env_file=(
