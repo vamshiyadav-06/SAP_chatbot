@@ -1,12 +1,14 @@
 import json
+import re
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 
 from backend.app.database import get_db
 from backend.app.schemas.rag import RAGQueryRequest, RAGQueryResponse
 from backend.app.services.rag_service import rag_service
+from backend.app.services.conversation_memory_service import conversation_memory_service
 from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.message import Message
@@ -14,6 +16,19 @@ from backend.app.security.auth import get_current_user
 
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
+
+
+def _public_result(result: dict, is_admin: bool) -> dict:
+    """Strip evidence, scoring and comparison internals from regular-user payloads."""
+    if is_admin:
+        return result
+    safe = dict(result)
+    for key in ("citations", "web_sources", "source_scores", "comparison_audit", "kb_score", "web_score",
+                "winning_score", "internal_evidence_confidence", "selected_evidence_quality",
+                "selected_source", "selection_summary"):
+        safe.pop(key, None)
+    safe["answer"] = re.sub(r"\[(?:E\d+|(?:KB|WEB|REPO)_\d+)\]", "", safe.get("answer", ""))
+    return safe
 
 
 @router.post("/query", response_model=RAGQueryResponse)
@@ -38,38 +53,33 @@ def query_rag(
             )
 
     # 2. Save the user's message
+    user_message = None
     if chat:
         user_message = Message(
             chat_id=chat.id,
             role="user",
-            content=request.query
+            content=request.query,
+            embedding=conversation_memory_service.embed_message_content(request.query)
         )
 
         db.add(user_message)
         db.commit()
         db.refresh(user_message)
 
-    # 3. Run RAG with chat history if available
+    # 3. Run RAG with chat history (max 20 messages) if available
     chat_history = []
     if chat and user_message:
-        prev_messages = (
-            db.query(Message)
-            .filter(Message.chat_id == chat.id)
-            .filter(Message.id != user_message.id)
-            .order_by(Message.created_at.asc())
-            .all()
+        chat_history = conversation_memory_service.get_recent_messages(
+            db, chat.id, limit=20, exclude_message_id=user_message.id
         )
-        chat_history = [
-            {"role": m.role, "content": m.content, "source_type": m.source_type}
-            for m in prev_messages
-        ]
 
     try:
         result = rag_service.process_query(
             db,
             request.query,
             chat_history=chat_history,
-            user=current_user
+            user=current_user,
+            chat_id=chat.id if chat else None
         )
 
     except Exception:
@@ -89,7 +99,8 @@ def query_rag(
             role="assistant",
             content=result["answer"],
             source_type=result["source_type"],
-            grounding_score=result["grounding_score"]
+            grounding_score=result["grounding_score"],
+            embedding=conversation_memory_service.embed_message_content(result["answer"])
         )
 
         db.add(assistant_message)
@@ -99,9 +110,28 @@ def query_rag(
         db.commit()
         db.refresh(assistant_message)
 
+        try:
+            conversation_memory_service.update_rolling_summary(
+                db, chat.id, request.query, result["answer"]
+            )
+        except Exception:
+            pass
+
         assistant_message_id = assistant_message.id
 
     # 5. Return response
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not is_admin:
+        return JSONResponse(content={
+            "answer": _public_result(result, False)["answer"],
+            "source_type": result["source_type"],
+            "grounding_score": result["grounding_score"],
+            "external_search_used": result.get("external_search_used", False),
+            "follow_up_questions": result.get("follow_up_questions", []),
+            "chat_id": chat.id if chat else None,
+            "message_id": assistant_message_id,
+        })
+    result = _public_result(result, True)
     return RAGQueryResponse(
         answer=result["answer"],
         source_type=result["source_type"],
@@ -117,8 +147,8 @@ def query_rag(
         internal_evidence_confidence=result.get("internal_evidence_confidence"),
         selected_evidence_quality=result.get("selected_evidence_quality"),
         external_search_used=result.get("external_search_used", False),
-        citations=result["citations"],
-        web_sources=result["web_sources"],
+        citations=result.get("citations", []),
+        web_sources=result.get("web_sources", []),
         images=result.get("images", []),
         follow_up_questions=result.get("follow_up_questions", []),
         selection_summary=result.get("selection_summary"),
@@ -139,35 +169,48 @@ def query_rag_stream(
             Chat.id == request.chat_id,
             Chat.user_id == current_user.id
         ).first()
+        if not chat:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found"
+            )
 
+    user_message = None
     if chat:
         user_message = Message(
             chat_id=chat.id,
             role="user",
-            content=request.query
+            content=request.query,
+            embedding=conversation_memory_service.embed_message_content(request.query)
         )
         db.add(user_message)
         db.commit()
+        db.refresh(user_message)
 
     chat_history = []
     if chat and user_message:
-        prev_messages = (
-            db.query(Message)
-            .filter(Message.chat_id == chat.id)
-            .filter(Message.id != user_message.id)
-            .order_by(Message.created_at.asc())
-            .all()
+        chat_history = conversation_memory_service.get_recent_messages(
+            db, chat.id, limit=20, exclude_message_id=user_message.id
         )
-        chat_history = [
-            {"role": m.role, "content": m.content, "source_type": m.source_type}
-            for m in prev_messages
-        ]
 
     def event_stream():
         accumulated_text = ""
-        for event in rag_service.stream_query(db, request.query, chat_history=chat_history, user=current_user):
+        emitted_safe_text = ""
+        for event in rag_service.stream_query(
+            db, request.query, chat_history=chat_history, user=current_user, chat_id=chat.id if chat else None
+        ):
             if event.get("type") == "token":
-                accumulated_text += event.get("content", "")
+                token_text = event.get("content", "")
+                accumulated_text += token_text
+                if not getattr(current_user, "is_admin", False):
+                    candidate = re.sub(r"\[(?:E\d+|(?:KB|WEB|REPO)_\d+)\]", "", accumulated_text)
+                    # Keep a possible marker split across chunks out of the SSE payload.
+                    open_bracket = candidate.rfind("[")
+                    if open_bracket >= 0 and "]" not in candidate[open_bracket:]:
+                        candidate = candidate[:open_bracket]
+                    if candidate.startswith(emitted_safe_text):
+                        event["content"] = candidate[len(emitted_safe_text):]
+                        emitted_safe_text = candidate
             elif event.get("type") == "done" and chat:
                 full_answer = event.get("answer", accumulated_text)
                 assistant_message = Message(
@@ -175,13 +218,27 @@ def query_rag_stream(
                     role="assistant",
                     content=full_answer,
                     source_type=event.get("source_type", "knowledge_base"),
-                    grounding_score=event.get("grounding_score", 0.0)
+                    grounding_score=event.get("grounding_score", 0.0),
+                    embedding=conversation_memory_service.embed_message_content(full_answer)
                 )
                 db.add(assistant_message)
                 chat.updated_at = datetime.now(timezone.utc)
                 db.commit()
                 db.refresh(assistant_message)
+                try:
+                    conversation_memory_service.update_rolling_summary(
+                        db, chat.id, request.query, full_answer
+                    )
+                except Exception:
+                    pass
                 event["message_id"] = assistant_message.id
+            if event.get("type") == "done" and not getattr(current_user, "is_admin", False):
+                event = _public_result(event, False)
+                for key in ("validation_audit", "answer_decision", "citations", "web_sources", "source_scores",
+                            "comparison_audit", "kb_score", "web_score", "winning_score",
+                            "internal_evidence_confidence", "selected_evidence_quality", "selected_source",
+                            "selection_summary"):
+                    event.pop(key, None)
 
             yield f"data: {json.dumps(event)}\n\n"
 

@@ -10,6 +10,7 @@ class CitationResponse(BaseModel):
     section: Optional[str] = None
     score: float
     snippet: str
+    ref: Optional[str] = None  # inline evidence marker (e.g. "E2") this citation backs
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -19,6 +20,7 @@ class WebSourceResponse(BaseModel):
     url: str
     domain: str
     snippet: str
+    ref: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,12 +1,18 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 
 class UserRegister(BaseModel):
     email: EmailStr
     name: str = Field(..., min_length=2, max_length=100)
-    password: str = Field(..., min_length=6, max_length=100)
-    role: Optional[str] = "consultant"
+    password: str = Field(..., min_length=12, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def bcrypt_byte_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 UTF-8 bytes")
+        return value
 
 class UserLogin(BaseModel):
     email: EmailStr

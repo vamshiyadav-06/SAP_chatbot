@@ -14,6 +14,7 @@ import { ChatPage } from './pages/ChatPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { SharedPromptPage } from './pages/SharedPromptPage';
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/features" element={<FeaturesPage />} />
           <Route path="/how-it-works" element={<HowItWorksPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/share/:token" element={<SharedPromptPage />} />
 
           {/* Dedicated Super Admin Authentication Gateway */}
           <Route path="/admin/login" element={<AdminLoginPage />} />

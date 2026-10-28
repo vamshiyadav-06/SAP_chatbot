@@ -311,10 +311,19 @@ class EvidenceSelectionService:
         internal_conf = internal_confidence_data.get("confidence", 0.0)
         ext_triggered = internal_confidence_data.get("should_trigger_tavily", False)
 
+        # For multi-aspect or complex questions with diverse candidate chunks, scale the
+        # internal chunk budget to preserve coverage across all aspects without context overflow.
+        has_multiple_aspects = len(internal_confidence_data.get("aspects", [])) > 1
+        internal_top_k = (
+            min(16, max(settings.RERANK_TOP_K, len(internal_confidence_data.get("aspects", [])) * 2, 8))
+            if has_multiple_aspects
+            else settings.RERANK_TOP_K
+        )
+
         # Decision Logic:
         # 1. If internal confidence was >= 70% and external was not needed or not triggered:
         if not ext_triggered and internal_eval["sufficiency"]:
-            selected_set = normalized_internal[:settings.RERANK_TOP_K]
+            selected_set = normalized_internal[:internal_top_k]
             selected_source_type = "knowledge_base"
             best_quality = internal_eval["quality_score"]
             summary = f"Selected internal SAP documentation (Confidence: {internal_conf:.2f} >= {self.internal_threshold:.2f})."
@@ -350,7 +359,7 @@ class EvidenceSelectionService:
 
             # If external search was weak but internal has sufficient evidence
             elif internal_eval["sufficiency"]:
-                selected_set = normalized_internal[:settings.RERANK_TOP_K]
+                selected_set = normalized_internal[:internal_top_k]
                 selected_source_type = "knowledge_base"
                 best_quality = internal_eval["quality_score"]
                 summary = f"External search yielded insufficient results; falling back to verified internal evidence (Quality: {best_quality:.2f})."
@@ -364,7 +373,7 @@ class EvidenceSelectionService:
 
         else:
             # External search disabled or not triggered but internal passed threshold
-            selected_set = normalized_internal[:settings.RERANK_TOP_K]
+            selected_set = normalized_internal[:internal_top_k]
             selected_source_type = "knowledge_base"
             best_quality = internal_eval["quality_score"]
             summary = f"Selected internal documentation (Quality: {best_quality:.2f})."

@@ -8,6 +8,12 @@ from backend.app.services.rag_service import rag_service
 from backend.app.database import SessionLocal
 
 
+def _guest_headers(client):
+    """Extraction requires a signed-in user; guests sign in through /auth/demo."""
+    token = client.post("/api/auth/demo").json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_document_extractor_pdf():
     # Create in-memory sample PDF
     doc = fitz.open()
@@ -47,6 +53,7 @@ def test_extract_endpoint_api():
 
     response = client.post(
         "/api/chats/extract-document",
+            headers=_guest_headers(client),
         files={"file": ("billing_spec.pdf", pdf_bytes, "application/pdf")}
     )
 

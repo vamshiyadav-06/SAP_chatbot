@@ -1,0 +1,82 @@
+{
+  "description": "Reviewed reference evidence for the Business Partner block regression scenario. Passages are verbatim copies of chunks indexed in the local knowledge base (document_chunks), copied read-only. Expected behavior in tests is derived from what these passages do and do not establish; no SAP behavior is asserted beyond them.",
+  "question": "If a Business Partner has a block status, where can we view it and how can we remove the block manually?",
+  "passages": [
+    {
+      "chunk_id": "1ff33dc5-bfb2-4b38-b80e-b66056ea7633",
+      "source_type": "knowledge_base",
+      "document_name": "SIMPL_OP1709.pdf",
+      "page_number": 401,
+      "section": "Page 401",
+      "chunk_text": "SAP \nReference IMG / SAP Customizing Implementation Guide (transaction SPRO): \nMaterials Management -> Purchasing -> Purchase Order -> Set up Stock \nTransport Order -> Define Shipping Data for Plants. \n• \nThe assignment of a blocked supplier to a plant can be removed via \ntransaction XK02 -> Purchasing data -> Extras -> Additional Purchasing Data. \n \nHow to Determine Relevancy \nWith notes 2502552 and 2524011 SAP offers a Simplification Item Check to identify \nblocked customers and suppliers in Inventory Management. Alternatively, the following \nsteps can be performed: \n1. Identify blocked customer master data in database table KNB1. The customer is \nblocked when the field CVP_XBLCK_B is set. Plants assigned to the company \ncode of the customer master record can be identified via transaction OX18. \n2. Identify blocked supplier master data in database table LFB1. The supplier is \nblocked when the field CVP_XBLCK_B is set. Plants assigned to the company \ncode of the supplier master record can be identified via transaction OX18.",
+      "score": 0.74,
+      "review": {
+        "establishes": [
+          "In the context of an S/4HANA 1709 simplification item about blocked customers/suppliers in Inventory Management, blocked customer master data is identified in table KNB1 and blocked supplier master data in table LFB1 when field CVP_XBLCK_B is set.",
+          "Transaction XK02 (path Purchasing data -> Extras -> Additional Purchasing Data) is cited for removing the ASSIGNMENT of a blocked supplier to a plant.",
+          "Transaction OX18 is cited for identifying plants assigned to the company code of the master record."
+        ],
+        "does_not_establish": [
+          "That CVP_XBLCK_B is a general/universal/operational Business Partner block indicator.",
+          "That XK02 (or any transaction) removes the block itself.",
+          "Any procedure for clearing CVP_XBLCK_B, or the downstream effects of doing so."
+        ]
+      }
+    },
+    {
+      "chunk_id": "69026d49-19dd-4d4f-94aa-fd0c618202b8",
+      "source_type": "knowledge_base",
+      "document_name": "SIMPL_OP1709.pdf",
+      "page_number": 80,
+      "section": "Page 80",
+      "chunk_text": "e is no specific user \ninterface for customer/vendor like known from SAP Business Suite (the specific \ntransactions like XD01, XD02, XD03 or VD01, VD02, VD03/XK01, XK02, XK03 or \nMK01, MK02, MK03 etc. are not available in SAP S/4HANA on-premise) \nTransaction not available in \nSAP S/4HANA on-premise \nedition \nFD01, FD02, FD03, FD06, FD0 \nFK01, FK02, FK03, FK06 \nMAP1, MAP2, MAP3 \nMK01, MK02, MK03, MK06, MK12, MK18, MK19, \nV-03, V-04, V-05, V-06, V-07, V-08, V-09, V-11, V+21, V+22, V+23 \nVAP1, VAP2, VAP3 \nVD01, VD02, VD03, VD06 \nXD01, XD02, XD03, XD06, XD07 \nXK01, XK02, XK03, XK06, XK07",
+      "score": 0.71,
+      "review": {
+        "establishes": [
+          "The customer/vendor-specific transactions XD01-XD03, VD01-VD03, XK01-XK03, MK01-MK03 and FD01-FD03 are listed as not available in SAP S/4HANA on-premise (1709 simplification list)."
+        ],
+        "does_not_establish": [
+          "Which transaction removes a Business Partner block in S/4HANA."
+        ]
+      }
+    },
+    {
+      "chunk_id": "4e779a6e-2308-43e9-9722-54d4a71b083b",
+      "source_type": "knowledge_base",
+      "document_name": "SIMPL_OP1709.pdf",
+      "page_number": 80,
+      "section": "Page 80",
+      "chunk_text": "nce, on-\npremise edition 1503 and 1605. \nBusiness Process related information \nOnly SAP Business Suite customer with C/V integration in place can move to SAP \nS/4HANA, on-premise(Conversion approach). It is recommended but not mandatory that \nBuPa ID and Customer-ID / Vendor ID are the same. \nThe user interface for SAP S/4HANA is transaction BP. There is no specific user \ninterface for customer/vendor like known from SAP Business Suite (the specific \ntransactions like XD01, XD02, XD03 or VD01, VD02, VD03/XK01, XK02, XK03 or \nMK01, MK02, MK03 etc.",
+      "score": 0.69,
+      "review": {
+        "establishes": [
+          "In SAP S/4HANA, the user interface for customer/vendor master data is transaction BP."
+        ],
+        "does_not_establish": [
+          "That transaction BP displays or removes any particular block type, or the screen/tab where a block is maintained."
+        ]
+      }
+    },
+    {
+      "chunk_id": "b85d3360-4926-46b6-8fca-9c7ae9f3174d",
+      "source_type": "knowledge_base",
+      "document_name": "BRIM_AC240_EN_Col16.pdf",
+      "page_number": 38,
+      "section": "Page 38",
+      "chunk_text": "Postings to a contract account can be prevented by a central posting block. This prevents \npostings, clearing, reversal, and the cancellation of clearing for the involved account.\nIn addition, the open items in this account are not dunned. During online clearing processing, \nopen items of blocked contract accounts are flagged with an appropriate icon. It is not \npossible to activate these items.\nIndividual business processes can also be prevented by locks. You can set these locks for all \nitems at contract account level or at the level of an individual item.\nLock reasons can be defined in Customizing.\nAll locks can be given a time limit. Once this limit has expired, the locks are deactivated.\nYou can generate a list of locks in the SAP application menu under Accounting → Financial \nAccounting → Contract Accounts Receivable and Payable → Periodic Processing → For \nContract Accounts → Evaluation of Business Blocks. You can select lock entries according to \nbusiness partner, contract account, lock category, process, and lock reason.\nYou can create processing locks with transaction FKLOCK2 (...Periodic Processing → For \nContract Accounts).",
+      "score": 0.72,
+      "review": {
+        "establishes": [
+          "FI-CA contract accounts can carry a central posting block that prevents postings, clearing, reversal and cancellation of clearing; open items in the account are not dunned.",
+          "Processing locks can be set at contract-account or item level, can have a time limit after which they are deactivated, and lock reasons are defined in Customizing.",
+          "A list of locks is available under Accounting -> Financial Accounting -> Contract Accounts Receivable and Payable -> Periodic Processing -> For Contract Accounts -> Evaluation of Business Blocks.",
+          "Processing locks can be created with transaction FKLOCK2."
+        ],
+        "does_not_establish": [
+          "That FKLOCK2 removes locks.",
+          "Anything about general Business Partner, customer or supplier master blocks."
+        ]
+      }
+    }
+  ]
+}

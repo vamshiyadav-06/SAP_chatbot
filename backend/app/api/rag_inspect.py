@@ -39,6 +39,22 @@ class SimilarityTestRequest(BaseModel):
     include_web_search: bool = False
 
 
+@router.get("/system-config")
+def get_system_config(current_user: User = Depends(get_current_admin_user)) -> Dict[str, Any]:
+    """The live model and threshold settings, for the admin System tab. No secrets."""
+    return {
+        "embedding_model": settings.EMBEDDING_MODEL,
+        "embedding_dim": settings.EMBEDDING_DIM,
+        "llm_provider": settings.LLM_PROVIDER,
+        "llm_model": settings.LLM_MODEL,
+        "similarity_threshold": settings.SIMILARITY_THRESHOLD,
+        "internal_evidence_threshold": settings.INTERNAL_EVIDENCE_THRESHOLD,
+        "grounding_threshold": settings.GROUNDING_THRESHOLD,
+        "admin_api_key_enabled": bool(settings.ADMIN_API_KEY),
+        "signed_in_admin": current_user.email,
+    }
+
+
 @router.get("/documents")
 def get_document_status(
     db: Session = Depends(get_db),

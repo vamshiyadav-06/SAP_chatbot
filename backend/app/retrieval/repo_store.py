@@ -50,7 +50,8 @@ class RepoStore:
             if self._cache_chunks is not None and self._cache_count == current_count:
                 return self._cache_chunks, self._cache_matrix
 
-            all_records = db.query(GithubRepoChunk).all()
+            # Explicit, stable order (PostgreSQL does not guarantee heap order).
+            all_records = db.query(GithubRepoChunk).order_by(GithubRepoChunk.created_at, GithubRepoChunk.id).all()
             meta_list = []
             vecs = []
             dim = settings.EMBEDDING_DIM

@@ -1,16 +1,69 @@
+# PostgreSQL + pgvector: the application's ONLY database (documents, chunks,
+# embeddings, users, chats). There is no SQLite fallback.
+#
+#   docker compose up -d postgres
+#
+# The backend runs on the host and connects to 127.0.0.1:${POSTGRES_HOST_PORT}
+# (see DATABASE_URL in backend/.env). A backend running inside this compose
+# network would instead use host "postgres", port 5432.
+#
+# PostgreSQL data is persisted in the named sap_brim_pgdata volume in this
+# checkout. The application uses its own role and database (sap_brim_ai); the
+# bootstrap role/database are sap_assistant.
+#
+# Never run `docker compose down -v`: it deletes the volume and every database in it.
+name: sap_brim
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: sap_assistant_postgres
-    restart: always
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: sap_assistant
+      # Superuser credentials apply only when the volume is first initialised.
+      POSTGRES_USER: ${POSTGRES_USER:-sap_assistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-sap_assistant}
+      # Used by docker/postgres/init to create the sap_brim_ai role on a fresh volume.
+      SAP_BRIM_DB_PASSWORD: ${SAP_BRIM_DB_PASSWORD:?Set SAP_BRIM_DB_PASSWORD in .env (see .env.example)}
     ports:
-      - "5434:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: sap_assistant_searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set a private SEARXNG_SECRET in .env}
+    ports:
+      - "127.0.0.1:${SEARXNG_HOST_PORT:-8089}:8080"
+    volumes:
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+
+  siftdog:
+    image: ghcr.io/khsarvar/siftdog:latest
+    container_name: sap_assistant_siftdog
+    restart: unless-stopped
+    depends_on:
+      - searxng
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      FETCH_TIMEOUT: ${SIFTDOG_FETCH_TIMEOUT:-15}
+      FETCH_CONCURRENCY: ${SIFTDOG_FETCH_CONCURRENCY:-10}
+      FETCH_MAX_BYTES: ${SIFTDOG_FETCH_MAX_BYTES:-2097152}
+      ALLOW_PRIVATE_NETWORKS: ${SIFTDOG_ALLOW_PRIVATE_NETWORKS:-false}
+      CRAWL_MAX_LIMIT: ${SIFTDOG_CRAWL_MAX_LIMIT:-50}
+      API_KEYS: ${SIFTDOG_API_KEY:-}
+    ports:
+      - "127.0.0.1:${SIFTDOG_HOST_PORT:-8088}:8000"
 
 volumes:
   pgdata:

@@ -35,6 +35,12 @@ class QueryRewriter:
 
         q = query.strip().lower()
 
+        # 0. Conversation memory queries (Never rewrite as follow-up!)
+        from backend.app.services.conversation_memory_service import conversation_memory_service, MemoryIntent
+        mem_intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
+        if mem_intent in (MemoryIntent.FIRST_MESSAGE_LOOKUP, MemoryIntent.LAST_MESSAGE_LOOKUP, MemoryIntent.HISTORY_RECALL, MemoryIntent.CROSS_CONVERSATION_RECALL):
+            return False, "conversation_memory_inquiry"
+
         # 1. Sentimental questions, greetings, and chit-chat (Never rewrite as follow-up!)
         greeting_patterns = [
             r"^(hi+|hey+|hello+|howdy|hola|namaste|greetings)\b",
@@ -97,7 +103,8 @@ class QueryRewriter:
             r"^what are (the )?benefits",
             r"^what are (the )?limitations",
             r"^what are its benefits",
-            r"^what are its components"
+            r"^what are its components",
+            r"^compare (this|that|it) with (the )?(previous|earlier|prior) approach",
         ]
         for trigger in short_followup_triggers:
             if re.search(trigger, q, re.IGNORECASE):
@@ -197,6 +204,9 @@ class QueryRewriter:
         # "can you explain in detail" / "explain in detail"
         if re.search(r"^(can you )?explain in detail", q_lower):
             return f"Explain {topic} in detail."
+
+        if re.search(r"^compare (this|that|it) with (the )?(previous|earlier|prior) approach", q_lower):
+            return f"Compare {topic} with the previous approach discussed earlier."
 
         # "what information does it contain"
         if "what information does it contain" in q_lower or "what does it contain" in q_lower:

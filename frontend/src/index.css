@@ -926,17 +926,42 @@ h1,h2,h3,p{margin-top:0}
 
 .prose-sap h1,
 .prose-sap h2,
-.prose-sap h3 {
+.prose-sap h3,
+.prose-sap h4 {
   color: #0f172a;
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
+  line-height: 1.35;
+}
+
+/* Modest scale so section headings stand out from body text without dominating short answers */
+.prose-sap h1 { font-size: 1.125rem; }
+.prose-sap h2 { font-size: 1.0625rem; }
+.prose-sap h3 { font-size: 1rem; }
+.prose-sap h4 { font-size: 0.9375rem; }
+
+.prose-sap > :first-child {
+  margin-top: 0;
 }
 
 .dark .prose-sap h1,
 .dark .prose-sap h2,
-.dark .prose-sap h3 {
+.dark .prose-sap h3,
+.dark .prose-sap h4 {
   color: #f8fafc;
+}
+
+/* Multi-line cells read top-down instead of floating mid-row */
+.prose-sap th,
+.prose-sap td {
+  vertical-align: top;
+}
+
+.prose-sap li > ul,
+.prose-sap li > ol {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
 }
 
 .prose-sap p {

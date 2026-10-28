@@ -1,0 +1,781 @@
+{
+ "description": "Claim-validation evaluation set. Evidence passages are verbatim knowledge-base chunks (copied read-only). Candidate answers are scripted to exercise specific failure modes; each label states what the cited evidence does or does not establish. Labels were reviewed against the passages only; they are not general SAP truths.",
+ "label_semantics": {
+  "supported": "The claim, as stated and cited, is established by the evidence.",
+  "not_supported": "The claim (or its attached citation) is not established, is contradicted, or is unsafe.",
+  "qualified": "An explicit limitation statement; must not be counted as an unsupported claim.",
+  "expect_publish_verified": "Whether the answer as written may be published as verified."
+ },
+ "evidence_pool": {
+  "simpl_401": {
+   "chunk_id": "1ff33dc5-bfb2-4b38-b80e-b66056ea7633",
+   "document_name": "SIMPL_OP1709.pdf",
+   "page_number": 401,
+   "section": "Page 401",
+   "chunk_text": "SAP \nReference IMG / SAP Customizing Implementation Guide (transaction SPRO): \nMaterials Management -> Purchasing -> Purchase Order -> Set up Stock \nTransport Order -> Define Shipping Data for Plants. \n• \nThe assignment of a blocked supplier to a plant can be removed via \ntransaction XK02 -> Purchasing data -> Extras -> Additional Purchasing Data. \n \nHow to Determine Relevancy \nWith notes 2502552 and 2524011 SAP offers a Simplification Item Check to identify \nblocked customers and suppliers in Inventory Management. Alternatively, the following \nsteps can be performed: \n1. Identify blocked customer master data in database table KNB1. The customer is \nblocked when the field CVP_XBLCK_B is set. Plants assigned to the company \ncode of the customer master record can be identified via transaction OX18. \n2. Identify blocked supplier master data in database table LFB1. The supplier is \nblocked when the field CVP_XBLCK_B is set. Plants assigned to the company \ncode of the supplier master record can be identified via transaction OX18."
+  },
+  "simpl_80_list": {
+   "chunk_id": "69026d49-19dd-4d4f-94aa-fd0c618202b8",
+   "document_name": "SIMPL_OP1709.pdf",
+   "page_number": 80,
+   "section": "Page 80",
+   "chunk_text": "e is no specific user \ninterface for customer/vendor like known from SAP Business Suite (the specific \ntransactions like XD01, XD02, XD03 or VD01, VD02, VD03/XK01, XK02, XK03 or \nMK01, MK02, MK03 etc. are not available in SAP S/4HANA on-premise) \nTransaction not available in \nSAP S/4HANA on-premise \nedition \nFD01, FD02, FD03, FD06, FD0 \nFK01, FK02, FK03, FK06 \nMAP1, MAP2, MAP3 \nMK01, MK02, MK03, MK06, MK12, MK18, MK19, \nV-03, V-04, V-05, V-06, V-07, V-08, V-09, V-11, V+21, V+22, V+23 \nVAP1, VAP2, VAP3 \nVD01, VD02, VD03, VD06 \nXD01, XD02, XD03, XD06, XD07 \nXK01, XK02, XK03, XK06, XK07 \nIn addition, note the following points while using the functionalities Consumer, and one-\ntime customer/supplier in SAP S/4HANA: \n• \nConsumer - While creating a consumer, ensure that you use the BP Grouping that \nis associated to the customer account group (Consumer) in TBD001 (Assignment \nof Account Group BP Grouping). Note that customer itself is a contact person, \nhence no further relationships can be maintained. \n• \nOne-time Customer/Supplier - While creating a one-time customer or supplier, \nensure that you use the BP Grouping that is associated to the customer/supplier"
+  },
+  "simpl_80_bp": {
+   "chunk_id": "4e779a6e-2308-43e9-9722-54d4a71b083b",
+   "document_name": "SIMPL_OP1709.pdf",
+   "page_number": 80,
+   "section": "Page 80",
+   "chunk_text": "nce, on-\npremise edition 1503 and 1605. \nBusiness Process related information \nOnly SAP Business Suite customer with C/V integration in place can move to SAP \nS/4HANA, on-premise(Conversion approach). It is recommended but not mandatory that \nBuPa ID and Customer-ID / Vendor ID are the same. \nThe user interface for SAP S/4HANA is transaction BP. There is no specific user \ninterface for customer/vendor like known from SAP Business Suite (the specific \ntransactions like XD01, XD02, XD03 or VD01, VD02, VD03/XK01, XK02, XK03 or \nMK01, MK02, MK03 etc."
+  },
+  "ac240_38_locks": {
+   "chunk_id": "b85d3360-4926-46b6-8fca-9c7ae9f3174d",
+   "document_name": "BRIM_AC240_EN_Col16.pdf",
+   "page_number": 38,
+   "section": "Page 38",
+   "chunk_text": "Postings to a contract account can be prevented by a central posting block. This prevents \npostings, clearing, reversal, and the cancellation of clearing for the involved account.\nIn addition, the open items in this account are not dunned. During online clearing processing, \nopen items of blocked contract accounts are flagged with an appropriate icon. It is not \npossible to activate these items.\nIndividual business processes can also be prevented by locks. You can set these locks for all \nitems at contract account level or at the level of an individual item.\nLock reasons can be defined in Customizing.\nAll locks can be given a time limit. Once this limit has expired, the locks are deactivated.\nYou can generate a list of locks in the SAP application menu under Accounting → Financial \nAccounting → Contract Accounts Receivable and Payable → Periodic Processing → For \nContract Accounts → Evaluation of Business Blocks. You can select lock entries according to \nbusiness partner, contract account, lock category, process, and lock reason.\nYou can create processing locks with transaction FKLOCK2 (...Periodic Processing → For \nContract Accounts)."
+  },
+  "ac240_289_bit": {
+   "chunk_id": "10a76ed1-a6e1-4a16-ad88-776e1eb12235",
+   "document_name": "BRIM_AC240_EN_Col16.pdf",
+   "page_number": 289,
+   "section": "Page 289",
+   "chunk_text": "The charged items are sent to SAP CI using the bulk loader process. As the fields of the \ncharged items and billable items are equal, no further field mapping is necessary. Bulk loading \nis generally a scheduled process, so it has to be triggered manually for testing purposes.\nSAP Convergent Invoicing (CI)\nIncoming charged items are called billable items in SAP CI. Billable items are stored with the \nprocessing status billable or raw, depending on possible issues that may occur during loading.\nFigure 237: Billable Items\nBillable items occur in very different service industries. The following section names some \nexamples.\nIn the telecommunication industry, a call includes technical data about the connection \nbetween two phone numbers. After the data has passed a charging plan and the price of the \ncall has been calculated, it represents a billable item.\nIn the postal services industry, a parcel shipment can be regarded as a billable item. There \nmay be additional insurance for the parcel shipment, so that both constitute billable items to \nbe calculated and printed on one invoice.\nIn the Internet services industry, the download of a song or an e-book is an example of a \nbillable item.\nLesson: SAP Convergent Invoicing\n© Copyright. All rights reserved.\n279"
+  },
+  "ac240_55_reckey": {
+   "chunk_id": "13e9221c-8c15-4a17-b458-1a7d02aec4cd",
+   "document_name": "BRIM_AC240_EN_Col16.pdf",
+   "page_number": 55,
+   "section": "Page 55",
+   "chunk_text": "Figure 37: Reconciliation Key Structure: Automatic Determination\nVarious business processes create a reconciliation key in the system. The reconciliation key is \nidentified by the current day in the business year, which is derived from the creation date, and \nthe source or name.\nReconciliation keys that have been created automatically are closed automatically at the end \nof the business process.\nThe system can also propose reconciliation keys for manual business transactions (post \ndocument or payment at cash desk). To do this, reconciliation groups for default values must \nbe maintained in Customizing. These reconciliation keys can be accepted or overwritten. You \nmust close them manually before transfer to the general ledger.\nLesson: Integration with General Ledger\n© Copyright. All rights reserved.\n45"
+  },
+  "ac240_188_coll_a": {
+   "chunk_id": "45928c08-dd39-43fc-b3b1-362b3a16b0f6",
+   "document_name": "BRIM_AC240_EN_Col16.pdf",
+   "page_number": 188,
+   "section": "Page 188",
+   "chunk_text": "The dunning activity FKK_COLL_AGENCY_RELEASE_0350 releases a receivable to an \nexternal collection agency. Receivables can be submitted to collection agencies for the \nfollowing items: receivables (also statistical items) and credit memos.\nThe external collection agency is determined by derivation rules defined in Customizing \n(event 5060).\nThe periodic submission flow (transaction FP03D or FP03DM) selects the documents and \ncreates a list or submission file (the submission file can also be generated in XML format). \nThe following data is updated:\n●\nIn the collection agency item (DFKKCOLL): Submission date, submission status (02: \nReceivable submitted), and possible submission amount, if not identical to the amount in \nthe open item\n●\nIn the document: Payment block, dunning block, or alternative payer (posting area 1054)\nLogs, which are listed in the DFKKOPCOLL table by the mass run for submitting receivables to \ncollection agencies (FP03DM), can be deleted using the FP03DML transaction.\nIn addition to the statuses delivered by SAP for items released and submitted to collection \nagencies, you can also define your own, company-specific submission statuses."
+  },
+  "ac240_188_coll_b": {
+   "chunk_id": "682c2f94-4d56-403b-91ff-142dcecca99d",
+   "document_name": "BRIM_AC240_EN_Col16.pdf",
+   "page_number": 188,
+   "section": "Page 188",
+   "chunk_text": "sing the FP03DML transaction.\nIn addition to the statuses delivered by SAP for items released and submitted to collection \nagencies, you can also define your own, company-specific submission statuses. You can use \nthe number range 20 to 99 for this.\nFigure 155: Submission of Receivables to External Collection Agency\nIn the Customizing activity Define Derivation Rules for Responsible Collection Agency, you can \ndefine which collection agency is to be used, depending on the data in the document.\nThe derivation rules defined in Customizing are evaluated by the derivation tool. The \nderivation tool is always called in the FKK_COLL_AG_SAMPLE_5060 function module when \nitems are released for submission individually in transaction FP03E or in mass release using \ntransaction FP03M.\nUnit 9: Dunning and Collections\n178\n© Copyright. All rights reserved."
+  }
+ },
+ "authority_cases": [
+  {
+   "url": "https://help.sap.com/docs/SAP_S4HANA_ON-PREMISE/x/y.html",
+   "official": true
+  },
+  {
+   "url": "https://me.sap.com/notes/2502552",
+   "official": true
+  },
+  {
+   "url": "https://community.sap.com/t5/enterprise-resource-planning-q-a/x",
+   "official": false
+  },
+  {
+   "url": "https://blogs.sap.com/2020/01/01/x/",
+   "official": false
+  },
+  {
+   "url": "https://news.sap.com/2024/01/x/",
+   "official": false
+  },
+  {
+   "url": "https://www.sap.com/products/x.html",
+   "official": false
+  }
+ ],
+ "cases": [
+  {
+   "id": "S1",
+   "level": "simple",
+   "question": "What processing statuses can billable items have when they are loaded into SAP Convergent Invoicing?",
+   "evidence": [
+    "ac240_289_bit"
+   ],
+   "expect_publish_verified": true,
+   "answer": "Incoming charged items are called billable items in SAP CI [E1]. Billable items are stored with the processing status billable or raw, depending on possible issues that may occur during loading [E1].",
+   "claims": [
+    {
+     "fragment": "called billable items",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "processing status billable or raw",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "S2",
+   "level": "simple",
+   "question": "What processing statuses can billable items have when they are loaded into SAP Convergent Invoicing?",
+   "evidence": [
+    "ac240_289_bit"
+   ],
+   "expect_publish_verified": false,
+   "answer": "Billable items are stored with the processing status billable or raw [E1]. Raw billable items are kept in table DFKKBIXBIT9 and are deleted after 30 days.",
+   "claims": [
+    {
+     "fragment": "status billable or raw",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "DFKKBIXBIT9",
+     "expected": "not_supported",
+     "kind": "fabricated",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "DFKKBIXBIT9"
+    ],
+    "ok": []
+   }
+  },
+  {
+   "id": "S3",
+   "level": "simple",
+   "question": "How are FI-CA reconciliation keys closed?",
+   "evidence": [
+    "ac240_55_reckey"
+   ],
+   "expect_publish_verified": true,
+   "answer": "Reconciliation keys that have been created automatically are closed automatically at the end of the business process [E1]. Reconciliation keys proposed for manual business transactions must be closed manually before transfer to the general ledger [E1].",
+   "claims": [
+    {
+     "fragment": "closed automatically at the end",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "must be closed manually",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "S4",
+   "level": "simple",
+   "question": "How are FI-CA reconciliation keys closed?",
+   "evidence": [
+    "ac240_55_reckey"
+   ],
+   "expect_publish_verified": false,
+   "answer": "Reconciliation keys that have been created automatically are closed automatically at the end of the business process [E1]. Closing a reconciliation key automatically triggers the immediate transfer of all postings to the general ledger.",
+   "claims": [
+    {
+     "fragment": "closed automatically at the end",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "triggers the immediate transfer",
+     "expected": "not_supported",
+     "kind": "causal",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "R1",
+   "level": "simple",
+   "question": "How to configure billable items?",
+   "evidence_inline": [
+    {
+     "chunk_id": "inline-ci",
+     "document_name": "SAP CI Guide",
+     "page_number": 12,
+     "chunk_text": "Billable items are stored in standard class tables in Convergent Invoicing."
+    }
+   ],
+   "evidence": [],
+   "expect_publish_verified": false,
+   "answer": "Execute transaction /1FE/FAKE_TRANSACTION_999 to configure table DFKK_FABRICATED_TABLE.",
+   "claims": [
+    {
+     "fragment": "FAKE_TRANSACTION_999",
+     "expected": "not_supported",
+     "kind": "fabricated",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "/1FE/FAKE_TRANSACTION_999"
+    ],
+    "ok": []
+   }
+  },
+  {
+   "id": "R2",
+   "level": "simple",
+   "question": "What is SAP Convergent Charging?",
+   "evidence_inline": [
+    {
+     "chunk_id": "inline-cc",
+     "document_name": "SAP CC Overview",
+     "page_number": 5,
+     "chunk_text": "SAP Convergent Charging provides high-throughput rating and charging for subscriber events."
+    }
+   ],
+   "evidence": [],
+   "expect_publish_verified": false,
+   "answer": "SAP Convergent Charging provides rating [E1]. It also automatically builds hardware quantum computers and manages airport air traffic controllers.",
+   "claims": [
+    {
+     "fragment": "provides rating",
+     "expected": "supported",
+     "kind": null,
+     "citation": null,
+     "release": null
+    },
+    {
+     "fragment": "quantum computers",
+     "expected": "not_supported",
+     "kind": null,
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "I1",
+   "level": "intermediate",
+   "question": "Which transactions release and submit receivables to an external collection agency in FI-CA?",
+   "evidence": [
+    "ac240_188_coll_a",
+    "ac240_188_coll_b"
+   ],
+   "expect_publish_verified": true,
+   "answer": "Receivables are released for submission individually in transaction FP03E or in mass release using transaction FP03M [E2]. The periodic submission flow (transaction FP03D or FP03DM) selects the documents and creates a list or submission file [E1]. During submission, the collection agency item (DFKKCOLL) is updated with the submission date and submission status [E1].",
+   "claims": [
+    {
+     "fragment": "FP03E or in mass release",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "periodic submission flow",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "collection agency item (DFKKCOLL)",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": [
+     "FP03E",
+     "FP03M",
+     "FP03D",
+     "FP03DM",
+     "DFKKCOLL"
+    ]
+   }
+  },
+  {
+   "id": "I2",
+   "level": "intermediate",
+   "question": "Which transactions release receivables to an external collection agency in FI-CA, and how is a receivable recalled?",
+   "evidence": [
+    "ac240_188_coll_a",
+    "ac240_188_coll_b"
+   ],
+   "expect_publish_verified": false,
+   "answer": "Receivables are released for submission individually in transaction FP03E [E2]. To recall a receivable from the collection agency, use transaction FP03E and delete the submission [E2].",
+   "claims": [
+    {
+     "fragment": "released for submission individually",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "recall a receivable",
+     "expected": "not_supported",
+     "kind": "operation",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "FP03E"
+    ],
+    "ok": []
+   },
+   "repair": {
+    "answer": "Receivables are released for submission individually in transaction FP03E [E2]. The retrieved documentation does not establish how a submitted receivable is recalled from the collection agency.",
+    "must_not_contain": [
+     "use transaction FP03E and delete"
+    ]
+   }
+  },
+  {
+   "id": "I3",
+   "level": "intermediate",
+   "question": "How do I remove a processing lock on a contract account?",
+   "evidence": [
+    "ac240_38_locks"
+   ],
+   "expect_publish_verified": false,
+   "answer": "Individual business processes can be prevented by locks set at contract account level or at the level of an individual item [E1]. All locks can be given a time limit, after which they are deactivated [E1]. To remove a processing lock, use transaction FKLOCK2 and delete the lock entry [E1].",
+   "claims": [
+    {
+     "fragment": "prevented by locks",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "time limit",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "use transaction FKLOCK2",
+     "expected": "not_supported",
+     "kind": "operation",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "FKLOCK2"
+    ],
+    "ok": []
+   }
+  },
+  {
+   "id": "I4",
+   "level": "intermediate",
+   "question": "What does a central posting block prevent on a contract account?",
+   "evidence": [
+    "ac240_38_locks",
+    "ac240_55_reckey"
+   ],
+   "expect_publish_verified": false,
+   "answer": "A central posting block prevents postings, clearing, reversal, and the cancellation of clearing for the involved account [E2]. In addition, the open items in this account are not dunned [E1].",
+   "claims": [
+    {
+     "fragment": "prevents postings, clearing",
+     "expected": "not_supported",
+     "kind": "citation",
+     "citation": "mismatch",
+     "release": null
+    },
+    {
+     "fragment": "not dunned",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "I5",
+   "level": "intermediate",
+   "question": "Where can I see a list of locks for contract accounts?",
+   "evidence": [
+    "ac240_38_locks"
+   ],
+   "expect_publish_verified": true,
+   "answer": "You can generate a list of locks in the SAP application menu under Accounting -> Financial Accounting -> Contract Accounts Receivable and Payable -> Periodic Processing -> For Contract Accounts -> Evaluation of Business Blocks [E1]. You can select lock entries according to business partner, contract account, lock category, process, and lock reason [E1].",
+   "claims": [
+    {
+     "fragment": "Evaluation of Business Blocks",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "select lock entries",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "I6",
+   "level": "intermediate",
+   "question": "Where can I see a list of locks for contract accounts?",
+   "evidence": [
+    "ac240_38_locks"
+   ],
+   "expect_publish_verified": false,
+   "answer": "You can see all locks in SPRO -> Financial Accounting -> Contract Accounts Receivable and Payable -> Business Locks -> Display Locks [E1].",
+   "claims": [
+    {
+     "fragment": "Display Locks",
+     "expected": "not_supported",
+     "kind": "path",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "A1",
+   "level": "advanced",
+   "question": "If a Business Partner has a block status, where can we view it and how can we remove the block manually?",
+   "evidence": [
+    "simpl_401",
+    "simpl_80_list",
+    "simpl_80_bp",
+    "ac240_38_locks"
+   ],
+   "expect_publish_verified": false,
+   "answer": "## Viewing the block\nYou can view the block in table KNB1, where the field CVP_XBLCK_B is the universal blocking indicator for the Business Partner [E1].\nPostings to a contract account can be prevented by a central posting block [E4].\n\n## Removing the block\n1. Run transaction XK02 for suppliers or FD02 for customers and untick the block flag [E1].\n2. Go to SPRO -> Cross-Application Components -> SAP Business Partner -> Unblock Partner.\n3. Alternatively, clear CVP_XBLCK_B directly in table KNB1 using SE16N.\n\nRemoving the block will automatically release all pending invoices for billing.",
+   "claims": [
+    {
+     "fragment": "universal blocking indicator",
+     "expected": "not_supported",
+     "kind": "field_meaning",
+     "citation": null,
+     "release": null
+    },
+    {
+     "fragment": "Postings to a contract account can be prevented",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "Run transaction XK02",
+     "expected": "not_supported",
+     "kind": "contradicted",
+     "citation": null,
+     "release": null
+    },
+    {
+     "fragment": "Unblock Partner",
+     "expected": "not_supported",
+     "kind": "path",
+     "citation": null,
+     "release": null
+    },
+    {
+     "fragment": "SE16N",
+     "expected": "not_supported",
+     "kind": "unsafe",
+     "citation": null,
+     "release": null
+    },
+    {
+     "fragment": "release all pending invoices",
+     "expected": "not_supported",
+     "kind": "causal",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "XK02",
+     "FD02",
+     "CVP_XBLCK_B"
+    ],
+    "ok": []
+   },
+   "repair": {
+    "answer": "The retrieved documentation does not describe one universal Business Partner block; it covers different restrictions at different levels.\n- FI-CA contract account: postings to a contract account can be prevented by a central posting block, which also prevents clearing and reversal for the account [E4].\n- FI-CA locks: you can generate a list of locks under Accounting -> Financial Accounting -> Contract Accounts Receivable and Payable -> Periodic Processing -> For Contract Accounts -> Evaluation of Business Blocks [E4].\n- Customer/supplier master data: in the S/4HANA 1709 simplification list, blocked customer master data is identified in table KNB1 when the field CVP_XBLCK_B is set [E1].\n- In SAP S/4HANA, the user interface for customer and vendor master data is transaction BP [E3].\nThe evidence does not establish which transaction removes a Business Partner block, so no removal procedure can be confirmed.\nWhich block type do you see (general BP, customer, supplier, company code, sales area, purchasing organization, or FI-CA contract account), and in which SAP release?",
+    "must_not_contain": [
+     "universal blocking indicator",
+     "untick the block flag",
+     "Unblock Partner",
+     "SE16N",
+     "release all pending invoices",
+     "remove the supplier block"
+    ]
+   }
+  },
+  {
+   "id": "A1b",
+   "level": "advanced",
+   "question": "If a Business Partner has a block status, where can we view it and how can we remove the block manually?",
+   "evidence": [
+    "simpl_401",
+    "simpl_80_list",
+    "simpl_80_bp",
+    "ac240_38_locks"
+   ],
+   "expect_publish_verified": false,
+   "answer": "## Viewing the block\nYou can view the block in table KNB1, where the field CVP_XBLCK_B is the universal blocking indicator for the Business Partner [E1].\nPostings to a contract account can be prevented by a central posting block [E4].\n\n## Removing the block\n1. Run transaction XK02 for suppliers or FD02 for customers and untick the block flag [E1].\n2. Go to SPRO -> Cross-Application Components -> SAP Business Partner -> Unblock Partner.\n3. Alternatively, clear CVP_XBLCK_B directly in table KNB1 using SE16N.\n\nRemoving the block will automatically release all pending invoices for billing.",
+   "claims": [],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   },
+   "repair": {
+    "answer": "Postings to a contract account can be prevented by a central posting block [E4].\nUse transaction XK02 to remove the supplier block [E1].",
+    "must_not_contain": [
+     "universal blocking indicator",
+     "untick the block flag",
+     "Unblock Partner",
+     "SE16N",
+     "release all pending invoices",
+     "remove the supplier block"
+    ]
+   }
+  },
+  {
+   "id": "A2",
+   "level": "advanced",
+   "question": "If a Business Partner has a block status, where can we view it and how can we remove the block manually?",
+   "evidence": [
+    "simpl_401",
+    "simpl_80_list",
+    "simpl_80_bp",
+    "ac240_38_locks"
+   ],
+   "expect_publish_verified": true,
+   "answer": "The retrieved documentation does not describe one universal Business Partner block; it covers different restrictions at different levels.\n- FI-CA contract account: postings to a contract account can be prevented by a central posting block, which also prevents clearing and reversal for the account [E4].\n- FI-CA locks: you can generate a list of locks under Accounting -> Financial Accounting -> Contract Accounts Receivable and Payable -> Periodic Processing -> For Contract Accounts -> Evaluation of Business Blocks [E4].\n- Customer/supplier master data: in the S/4HANA 1709 simplification list, blocked customer master data is identified in table KNB1 when the field CVP_XBLCK_B is set [E1].\n- In SAP S/4HANA, the user interface for customer and vendor master data is transaction BP [E3].\nThe evidence does not establish which transaction removes a Business Partner block, so no removal procedure can be confirmed.\nWhich block type do you see (general BP, customer, supplier, company code, sales area, purchasing organization, or FI-CA contract account), and in which SAP release?",
+   "claims": [
+    {
+     "fragment": "one universal Business Partner block",
+     "expected": "qualified",
+     "kind": null,
+     "citation": null,
+     "release": null
+    },
+    {
+     "fragment": "prevented by a central posting block",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "Evaluation of Business Blocks",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "blocked customer master data is identified in table KNB1",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "transaction BP",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "does not establish which transaction",
+     "expected": "qualified",
+     "kind": null,
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": [
+     "CVP_XBLCK_B",
+     "KNB1",
+     "BP"
+    ]
+   }
+  },
+  {
+   "id": "A3",
+   "level": "advanced",
+   "question": "Can the assignment of a blocked supplier to a plant be removed with XK02 in S/4HANA?",
+   "evidence": [
+    "simpl_401",
+    "simpl_80_list"
+   ],
+   "expect_publish_verified": false,
+   "answer": "Yes, the assignment of a blocked supplier to a plant can be removed via transaction XK02 [E1].",
+   "claims": [
+    {
+     "fragment": "can be removed via transaction XK02",
+     "expected": "not_supported",
+     "kind": "conflict",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "XK02"
+    ],
+    "ok": []
+   }
+  },
+  {
+   "id": "A4",
+   "level": "advanced",
+   "question": "Can the assignment of a blocked supplier to a plant be removed with XK02 in S/4HANA?",
+   "evidence": [
+    "simpl_401",
+    "simpl_80_list"
+   ],
+   "expect_publish_verified": true,
+   "answer": "The 1709 simplification list states that the assignment of a blocked supplier to a plant can be removed via transaction XK02 [E1]. The same list states that XK02 is not available in SAP S/4HANA on-premise [E2]. Whether XK02 can be used for this in your S/4HANA release could not be confirmed from the retrieved documentation.",
+   "claims": [
+    {
+     "fragment": "states that the assignment",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "XK02 is not available",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "could not be confirmed",
+     "expected": "qualified",
+     "kind": null,
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": [
+     "XK02"
+    ]
+   }
+  },
+  {
+   "id": "A5",
+   "level": "advanced",
+   "question": "Which transaction is the user interface for customer master data in SAP ECC 6.0?",
+   "evidence": [
+    "simpl_80_bp"
+   ],
+   "expect_publish_verified": false,
+   "answer": "The user interface for customer and vendor master data is transaction BP [E1].",
+   "claims": [
+    {
+     "fragment": "transaction BP",
+     "expected": "not_supported",
+     "kind": "release",
+     "citation": null,
+     "release": "mismatch"
+    }
+   ],
+   "identifiers": {
+    "flag": [],
+    "ok": []
+   }
+  },
+  {
+   "id": "A6",
+   "level": "advanced",
+   "question": "How do I change the submission status of a receivable submitted to a collection agency?",
+   "evidence": [
+    "ac240_188_coll_a"
+   ],
+   "expect_publish_verified": false,
+   "answer": "The submission status is stored in the collection agency item (DFKKCOLL) [E1]. Update the submission status directly in table DFKKCOLL using SE16N.",
+   "claims": [
+    {
+     "fragment": "stored in the collection agency item",
+     "expected": "supported",
+     "kind": null,
+     "citation": "correct",
+     "release": null
+    },
+    {
+     "fragment": "using SE16N",
+     "expected": "not_supported",
+     "kind": "unsafe",
+     "citation": null,
+     "release": null
+    }
+   ],
+   "identifiers": {
+    "flag": [
+     "SE16N"
+    ],
+    "ok": []
+   }
+  }
+ ]
+}

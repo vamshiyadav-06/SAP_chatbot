@@ -13,7 +13,8 @@ from backend.app.models.message import Message
 from backend.app.schemas.chat import ChatCreate, ChatUpdate, ChatResponse, ChatListItem
 from backend.app.schemas.message import DocumentExtractResponse
 from backend.app.services.document_extractor import extract_document
-from backend.app.security.auth import get_current_user, get_optional_current_user
+from backend.app.services.image_vision_service import analyze_chat_image, is_chat_image
+from backend.app.security.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,6 @@ def create_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # For demo / guest users, purge prior ephemeral chats so guest chats do not store
-    if current_user.email == "consultant@clyptusap.ai":
-        old_chats = db.query(Chat).filter(Chat.user_id == current_user.id).all()
-        for oc in old_chats:
-            db.query(Message).filter(Message.chat_id == oc.id).delete(synchronize_session=False)
-            db.delete(oc)
-        db.commit()
-
     chat = Chat(
         user_id=current_user.id,
         title=chat_in.title or "New SAP Chat"
@@ -50,10 +43,6 @@ def list_chats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Never return persistent saved chats for the guest / demo user
-    if current_user.email == "consultant@clyptusap.ai":
-        return []
-
     query = (
         db.query(
             Chat.id,
@@ -158,24 +147,34 @@ def delete_chat(
 @router.post("/extract-document", response_model=DocumentExtractResponse)
 async def extract_chat_document(
     file: UploadFile = File(...),
-    current_user: Optional[User] = Depends(get_optional_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Extracts text and page metadata from uploaded PDF, Word (DOCX), PNG, or plain text documents.
-    Enforces maximum file size limit of 25MB and returns structured content for question answering.
+    Extracts text and page metadata from uploaded PDF, Word (DOCX), image, or plain text documents.
+    Images are read by a vision model (with OCR cross-check/fallback) so screenshots of errors
+    and questions can be answered. Enforces a 25MB limit and returns structured content.
     """
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded")
 
-    content = await file.read()
-    if len(content) > 25 * 1024 * 1024:
+    max_bytes = 10 * 1024 * 1024
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        await file.close()
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds the 25MB limit."
+            detail="File size exceeds the 10MB limit."
         )
+    await file.close()
+
+    allowed = {".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    import os
+    if os.path.splitext(file.filename.lower())[1] not in allowed:
+        raise HTTPException(status_code=415, detail="Unsupported document type.")
 
     try:
-        extracted = await run_in_threadpool(extract_document, file.filename, content)
+        extractor = analyze_chat_image if is_chat_image(file.filename) else extract_document
+        extracted = await run_in_threadpool(extractor, file.filename, content)
         if not extracted.get("text", "").strip():
             raise ValueError(f"No readable text could be extracted from '{file.filename}'.")
         return DocumentExtractResponse(**extracted)

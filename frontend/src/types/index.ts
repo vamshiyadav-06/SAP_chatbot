@@ -4,7 +4,6 @@ export interface User {
   name: string;
   is_admin?: boolean;
   role?: string;
-  isGuest?: boolean;
   avatar?: string;
   dateOfBirth?: string;
   profileCompleted?: boolean;
@@ -48,6 +47,8 @@ export interface DocumentAttachment {
   preview?: string;
 }
 
+export type MessageFeedback = 'up' | 'down';
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -68,6 +69,7 @@ export interface Message {
   is_in_rag_pipeline?: boolean;
   external_search_used?: boolean;
   follow_up_questions?: string[];
+  feedback?: MessageFeedback | null;
   security_restricted?: boolean;
   violation_category?: string;
   created_at: string;

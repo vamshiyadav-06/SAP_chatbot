@@ -10,11 +10,13 @@ Provides:
 
 import json
 import logging
-import sqlite3
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
 
+from sqlalchemy import text
+
 from backend.app.config import settings
+from backend.app.database import engine
 from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
 from backend.app.corpus.module_tagger import tag_chunk_modules
 from backend.app.corpus.identifier_indexer import (
@@ -25,7 +27,6 @@ from backend.app.corpus.identifier_indexer import (
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).resolve().parent.parent.parent / "sap_assistant.db"
 CORPUS_INDEX_JSON = Path(__file__).resolve().parent.parent / "corpus" / "corpus_identifier_index.json"
 
 
@@ -35,8 +36,7 @@ class CorpusService:
     and domain exclusion guardrails.
     """
 
-    def __init__(self, db_path: Path = DB_PATH):
-        self.db_path = db_path
+    def __init__(self):
         self._identifier_cache: Optional[Dict[str, Dict[str, Any]]] = None
 
     def get_document_tier(self, filename: str) -> str:
@@ -74,14 +74,13 @@ class CorpusService:
 
         # Fallback to database table
         index_dict = {}
-        if self.db_path.exists():
-            try:
-                conn = sqlite3.connect(self.db_path)
-                c = conn.cursor()
-                # Check if table exists
-                tbl_check = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='corpus_identifier_index'").fetchone()
+        try:
+            with engine.connect() as conn:
+                tbl_check = conn.execute(text("SELECT to_regclass('corpus_identifier_index')")).scalar()
                 if tbl_check:
-                    rows = c.execute("SELECT identifier, type, module, tier, chunk_ids, occurrence_count FROM corpus_identifier_index").fetchall()
+                    rows = conn.execute(text(
+                        "SELECT identifier, type, module, tier, chunk_ids, occurrence_count FROM corpus_identifier_index"
+                    )).fetchall()
                     for r in rows:
                         index_dict[r[0]] = {
                             "identifier": r[0],
@@ -91,9 +90,8 @@ class CorpusService:
                             "chunk_ids": json.loads(r[4]),
                             "occurrence_count": r[5]
                         }
-                conn.close()
-            except Exception as e:
-                logger.error(f"Failed to load identifier index from SQLite: {e}")
+        except Exception as e:
+            logger.error(f"Failed to load identifier index from PostgreSQL: {e}")
 
         self._identifier_cache = index_dict
         return self._identifier_cache
@@ -160,24 +158,19 @@ class CorpusService:
             doc = document_service.process_pdf(db, file_path)
 
             # Record in corpus_document_metadata
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            c.execute("""
-            INSERT OR REPLACE INTO corpus_document_metadata
-            (id, filename, tier, is_off_domain, category, reason, page_count, chunk_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                doc.id,
-                file_path.name,
-                "official_sap",
-                0,
-                "User-Ingested Official SAP Document",
-                "Ingested with explicit licence confirmation",
-                doc.page_count,
-                len(doc.chunks)
-            ))
-            conn.commit()
-            conn.close()
+            from backend.app.corpus.corpus_builder import UPSERT_DOCUMENT_METADATA, init_corpus_tables
+            with engine.begin() as conn:
+                init_corpus_tables(conn)
+                conn.execute(UPSERT_DOCUMENT_METADATA, {
+                    "id": doc.id,
+                    "filename": file_path.name,
+                    "tier": "official_sap",
+                    "is_off_domain": 0,
+                    "category": "User-Ingested Official SAP Document",
+                    "reason": "Ingested with explicit licence confirmation",
+                    "page_count": doc.page_count,
+                    "chunk_count": len(doc.chunks),
+                })
 
             return {
                 "document_id": doc.id,

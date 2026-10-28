@@ -8,10 +8,11 @@ import React, {
 import type { User } from '../types';
 
 import {
+  ApiError,
   apiGetMe,
+  apiLogout,
   apiLogin,
   apiAdminLogin,
-  apiDemoLogin,
   apiRegister,
   getStoredToken,
   setStoredToken,
@@ -29,7 +30,6 @@ interface AuthContextType {
     email: string,
     password: string
   ) => Promise<void>;
-  guestLogin: () => Promise<void>;
   updateProfile: (updates: { name: string; dateOfBirth?: string; avatar?: string }) => void;
   logout: () => void;
 }
@@ -54,38 +54,35 @@ export const AuthProvider: React.FC<{
         try {
           const userData = await apiGetMe();
           const savedLocalProfile = localStorage.getItem(LOCAL_USER_KEY);
-          let extra = {};
+          let extra: { dateOfBirth?: string; avatar?: string } = {};
           if (savedLocalProfile) {
-            try { extra = JSON.parse(savedLocalProfile); } catch {}
+            try {
+              const cached = JSON.parse(savedLocalProfile);
+              extra = { dateOfBirth: cached.dateOfBirth, avatar: cached.avatar };
+            } catch {}
           }
           setUser({ ...userData, profileCompleted: true, ...extra });
           setToken(stored);
         } catch (error) {
           console.error('Authentication initialization failed:', error);
-          // Check if there is a cached guest/local session
-          const savedLocal = localStorage.getItem(LOCAL_USER_KEY);
-          if (savedLocal) {
-            try {
-              const parsed = JSON.parse(savedLocal);
-              setUser(parsed);
-            } catch {
-              clearStoredToken();
-              setToken(null);
-              setUser(null);
-            }
+          const status = error instanceof ApiError ? error.status : undefined;
+          if (status === 401 || status === 403) {
+            // The server rejected the token (expired or signed with an old secret). Restoring the
+            // cached profile would look signed in while every chat request fails, so sign out.
+            clearStoredToken();
+            localStorage.removeItem(LOCAL_USER_KEY);
+            setToken(null);
+            setUser(null);
           } else {
             clearStoredToken();
+            localStorage.removeItem(LOCAL_USER_KEY);
             setToken(null);
             setUser(null);
           }
         }
       } else {
-        const savedLocal = localStorage.getItem(LOCAL_USER_KEY);
-        if (savedLocal) {
-          try {
-            setUser(JSON.parse(savedLocal));
-          } catch {}
-        }
+        localStorage.removeItem(LOCAL_USER_KEY);
+        setUser(null);
       }
 
       setLoading(false);
@@ -104,13 +101,10 @@ export const AuthProvider: React.FC<{
     setToken(data.access_token);
     const enrichedUser: User = {
       ...data.user,
-      isGuest: false,
       profileCompleted: true,
     };
     setUser(enrichedUser);
     localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
-    // Reset guest trial count on real login
-    localStorage.removeItem('clyptus_trial_query_count');
   };
 
   const adminLogin = async (
@@ -123,12 +117,10 @@ export const AuthProvider: React.FC<{
     setToken(data.access_token);
     const enrichedUser: User = {
       ...data.user,
-      isGuest: false,
       profileCompleted: true,
     };
     setUser(enrichedUser);
     localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
-    localStorage.removeItem('clyptus_trial_query_count');
   };
 
 
@@ -147,41 +139,10 @@ export const AuthProvider: React.FC<{
     setToken(data.access_token);
     const enrichedUser: User = {
       ...data.user,
-      isGuest: false,
       profileCompleted: true,
     };
     setUser(enrichedUser);
     localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
-    // Reset guest trial count on real registration
-    localStorage.removeItem('clyptus_trial_query_count');
-  };
-
-  const guestLogin = async () => {
-    try {
-      const data = await apiDemoLogin();
-      setStoredToken(data.access_token);
-      setToken(data.access_token);
-      const enrichedUser: User = {
-        ...data.user,
-        isGuest: true,
-        profileCompleted: true,
-      };
-      setUser(enrichedUser);
-      localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
-    } catch (err) {
-      console.warn('Backend demo endpoint unavailable, using offline fallback', err);
-      const guestUser: User = {
-        id: 'usr_guest_' + Date.now().toString(36),
-        name: 'SAP Consultant',
-        email: 'consultant@clyptusap.ai',
-        is_admin: false,
-        isGuest: true,
-        profileCompleted: true,
-        created_at: new Date().toISOString(),
-      };
-      setUser(guestUser);
-      localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(guestUser));
-    }
   };
 
   const updateProfile = (updates: { name: string; dateOfBirth?: string; avatar?: string }) => {
@@ -202,6 +163,7 @@ export const AuthProvider: React.FC<{
   };
 
   const logout = (): void => {
+    void apiLogout().catch(() => undefined);
     clearStoredToken();
     localStorage.removeItem(LOCAL_USER_KEY);
     setToken(null);
@@ -217,7 +179,6 @@ export const AuthProvider: React.FC<{
         login,
         adminLogin,
         register,
-        guestLogin,
         updateProfile,
         logout,
       }}
