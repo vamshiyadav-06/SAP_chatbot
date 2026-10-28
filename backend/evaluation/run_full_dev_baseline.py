@@ -171,7 +171,7 @@ def evaluate_refusal_or_false_premise(
     """
     ans_lower = answer.lower()
     refusal_markers = [
-        "cannot be answered", "not documented in", "only help with sap",
+        "cannot be answered", "not documented in", "only help with sap", "only assist with sap",
         "outside my scope", "confidential", "unable to answer",
         "does not exist in standard sap", "abstain", "insufficient evidence"
     ]

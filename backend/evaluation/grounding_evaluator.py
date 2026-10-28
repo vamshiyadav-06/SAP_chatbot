@@ -27,6 +27,7 @@ class GroundingEvaluator:
                 or "could not be verified" in answer.lower()
                 or "insufficient" in answer.lower()
                 or "only help with sap" in answer.lower()
+                or "only assist with sap" in answer.lower()
             )
             abstention_quality = 1.0 if is_refusal else 0.0
         else:

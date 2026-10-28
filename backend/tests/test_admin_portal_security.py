@@ -1,3 +1,6 @@
+import secrets
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from backend.app.main import app
@@ -6,20 +9,37 @@ from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.message import Message
 from backend.app.models.citation import Citation
+from backend.app.security.auth import hash_password
 
 client = TestClient(app)
 
+# A throwaway admin with random credentials: tests never depend on a published password.
+ADMIN_EMAIL = f"portal_admin_{uuid.uuid4().hex[:8]}@sap.com"
+ADMIN_PASSWORD = secrets.token_urlsafe(16)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _test_admin():
+    db = SessionLocal()
+    try:
+        db.add(User(email=ADMIN_EMAIL, name="Portal Admin", password_hash=hash_password(ADMIN_PASSWORD),
+                    is_admin=True, role="admin"))
+        db.commit()
+    finally:
+        db.close()
+    yield
+
 
 def test_admin_login_and_credentials():
-    """Verify designated admin vamshiyadav245@gmail.com can securely login."""
+    """Verify an admin account can securely log in."""
     resp = client.post(
         "/api/auth/admin-login",
-        json={"email": "vamshiyadav245@gmail.com", "password": "Vamshi@06"},
+        json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert "access_token" in data
-    assert data["user"]["email"] == "vamshiyadav245@gmail.com"
+    assert data["user"]["email"] == ADMIN_EMAIL
     assert data["user"]["is_admin"] is True
     assert data["user"]["role"] == "admin"
 
@@ -61,7 +81,7 @@ def test_document_and_sources_access_control():
     # 3. Super Admin token must succeed (200)
     admin_login = client.post(
         "/api/auth/admin-login",
-        json={"email": "vamshiyadav245@gmail.com", "password": "Vamshi@06"},
+        json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
     )
     admin_token = admin_login.json()["access_token"]
 
@@ -71,11 +91,18 @@ def test_document_and_sources_access_control():
     admin_rag = client.get("/api/rag-inspect/documents", headers={"Authorization": f"Bearer {admin_token}"})
     assert admin_rag.status_code == 200
 
+    # System tab settings: admins only, and never any secret.
+    admin_config = client.get("/api/rag-inspect/system-config", headers={"Authorization": f"Bearer {admin_token}"})
+    assert admin_config.status_code == 200
+    assert admin_config.json()["signed_in_admin"] == ADMIN_EMAIL
+    assert "JWT_SECRET" not in admin_config.text and "secret" not in admin_config.text.lower()
+    assert client.get("/api/rag-inspect/system-config").status_code == 401
+
 
 def test_citations_stripped_for_regular_users():
     """Verify regular users do not receive internal citations, while admins do."""
     db = SessionLocal()
-    admin_user = db.query(User).filter(User.email == "vamshiyadav245@gmail.com").first()
+    admin_user = db.query(User).filter(User.email == ADMIN_EMAIL).first()
     assert admin_user is not None
 
     # Create an admin chat with a citation
@@ -112,7 +139,7 @@ def test_citations_stripped_for_regular_users():
     # Admin access token
     admin_login = client.post(
         "/api/auth/admin-login",
-        json={"email": "vamshiyadav245@gmail.com", "password": "Vamshi@06"},
+        json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
     )
     admin_token = admin_login.json()["access_token"]
 

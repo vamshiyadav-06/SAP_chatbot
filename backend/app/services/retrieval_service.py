@@ -83,7 +83,8 @@ class RetrievalService:
                     self._cache_idf
                 )
 
-            all_chunks = db.query(DocumentChunk).all()
+            # Explicit, stable order: tie-breaking in the ranking channels depends on position.
+            all_chunks = db.query(DocumentChunk).order_by(DocumentChunk.insertion_order).all()
             chunks_meta = []
             vecs = []
             dim = settings.EMBEDDING_DIM

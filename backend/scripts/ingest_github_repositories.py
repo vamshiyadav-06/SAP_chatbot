@@ -22,7 +22,7 @@ import logging
 import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # Ensure project root is on sys.path
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent

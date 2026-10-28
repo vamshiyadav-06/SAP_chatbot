@@ -210,7 +210,7 @@ export const RAGInspectorPanel: React.FC = () => {
     try {
       const res = await fetch(`${API_BASE}/admin/documents/ingest`, {
         method: 'POST',
-        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json', 'X-Admin-Key': 'sap-admin-dev-secret-key-999' }
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' }
       });
       const data = await res.json();
       const details: Array<{status: string}> = data.details || [];

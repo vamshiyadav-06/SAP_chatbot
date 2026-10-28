@@ -1,3 +1,4 @@
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
@@ -13,6 +14,8 @@ from backend.app.models.user import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login", auto_error=False)
 
 def hash_password(password: str) -> str:
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("Password exceeds the bcrypt 72-byte limit")
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
@@ -47,15 +50,16 @@ def get_current_user(
     if not token:
         raise credentials_exception
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM], options={"require": ["exp", "iat", "sub"]})
         user_id: str = payload.get("sub")
+        token_version = payload.get("ver")
         if user_id is None:
             raise credentials_exception
     except jwt.PyJWTError:
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
+    if user is None or token_version != user.token_version:
         raise credentials_exception
     return user
 
@@ -66,13 +70,23 @@ def get_optional_current_user(
     if not token:
         return None
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
+                             options={"require": ["exp", "iat", "sub", "ver"]})
         user_id: str = payload.get("sub")
         if user_id:
-            return db.query(User).filter(User.id == user_id).first()
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and payload.get("ver") == user.token_version:
+                return user
     except Exception:
         pass
     return None
+
+def admin_key_matches(candidate: Optional[str]) -> bool:
+    """X-Admin-Key check in constant time. An unset ADMIN_API_KEY disables key access entirely."""
+    configured = settings.ADMIN_API_KEY
+    if not configured or not candidate:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), configured.encode("utf-8"))
 
 def get_current_admin_user(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_admin:
@@ -88,15 +102,16 @@ def verify_admin_key_or_user(
     db: Session = Depends(get_db)
 ) -> bool:
     """Verifies either valid X-Admin-Key header or valid admin JWT token."""
-    if x_admin_key and x_admin_key == settings.ADMIN_API_KEY:
+    if admin_key_matches(x_admin_key):
         return True
     if token:
         try:
-            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
+                                 options={"require": ["exp", "iat", "sub", "ver"]})
             user_id = payload.get("sub")
             if user_id:
                 user = db.query(User).filter(User.id == user_id).first()
-                if user and user.is_admin:
+                if user and user.is_admin and payload.get("ver") == user.token_version:
                     return True
         except Exception:
             pass

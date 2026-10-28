@@ -280,4 +280,4 @@ def test_12_failure_resilience(db_session):
     """
     res = rag_service.process_query(db_session, "Explain the weather in Paris")
     assert res["source_type"] == "refusal"
-    assert "only help with sap" in res["answer"].lower()
+    assert "only assist with sap" in res["answer"].lower() or "only help with sap" in res["answer"].lower()

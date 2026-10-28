@@ -38,6 +38,17 @@ AUTHORITY_WEIGHTS = {
     "unknown": 0.50
 }
 
+# Web sources classified by hostname (web_search_service.classify_authority).
+# Official documentation and SAP Notes/KBAs outrank community and other pages.
+WEB_AUTHORITY_CLASS_WEIGHTS = {
+    "official_sap_help": AUTHORITY_WEIGHTS["official_help_doc"],
+    "sap_support_note": AUTHORITY_WEIGHTS["official_help_doc"],
+    "sap_learning": AUTHORITY_WEIGHTS["official_web"],
+    "official_sap_other": 0.70,
+    "sap_community": AUTHORITY_WEIGHTS["sap_community"],
+    "third_party": 0.40,
+}
+
 
 class MultiSourceComparator:
     def __init__(self):
@@ -120,10 +131,13 @@ class MultiSourceComparator:
 
         elif source_type == "web":
             domain = raw_candidate.get("domain", "")
-            prov_tier = "official_web" if "help.sap.com" in domain else "forum_web"
+            authority_class = raw_candidate.get("authority_class")
+            prov_tier = "official_web" if (
+                "help.sap.com" in domain or authority_class in ("official_sap_help", "sap_support_note")
+            ) else "forum_web"
             lic_status = "approved"
             gate_status = "passed"
-            authority_weight = self.get_source_authority_weight(prov_tier, domain=domain)
+            authority_weight = WEB_AUTHORITY_CLASS_WEIGHTS.get(authority_class) or self.get_source_authority_weight(prov_tier, domain=domain)
             citation_meta = {
                 "document": raw_candidate.get("title", "SAP Web Documentation"),
                 "page": 1,
@@ -139,6 +153,10 @@ class MultiSourceComparator:
                 "url": raw_candidate.get("url", ""),
                 "domain": domain,
                 "snippet": citation_meta["snippet"],
+                "authority_class": authority_class,
+                "release": raw_candidate.get("release"),
+                "published_date": raw_candidate.get("published_date"),
+                "content_extracted": bool(raw_candidate.get("content_extracted")),
             }
 
         else:
@@ -283,6 +301,17 @@ class MultiSourceComparator:
             if len(top_sources) > 1 and abs(eligible_candidates[0]["final_score"] - eligible_candidates[1]["final_score"]) < 0.05:
                 conflicts_detected = True
 
+        # Content-level conflicts between internal and external evidence: an identifier
+        # documented for use in one source but declared unavailable in another.
+        try:
+            from backend.app.services.sap_identifier_validator import sap_identifier_validator
+            evidence_conflicts = sap_identifier_validator.detect_evidence_conflicts(eligible_candidates[:8])
+        except Exception as exc:
+            logger.warning(f"Evidence conflict detection skipped: {exc}")
+            evidence_conflicts = []
+        if evidence_conflicts:
+            conflicts_detected = True
+
         comparison_object = {
             "query_id": query_id,
             "sources_compared": sources_compared,
@@ -295,7 +324,8 @@ class MultiSourceComparator:
             "selection_reason": selection_reason,
             "rejected_candidates": rejected_candidates[:5],
             "evidence_gaps": ["No official SAP match"] if winning_source == "insufficient" else [],
-            "conflicts_detected": conflicts_detected
+            "conflicts_detected": conflicts_detected,
+            "evidence_conflicts": evidence_conflicts,
         }
 
         return {

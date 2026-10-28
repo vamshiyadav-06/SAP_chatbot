@@ -1,7 +1,7 @@
 """
 Corpus Builder and Metadata Generator for Phase 1.
-Processes the live document and chunk inventory in sap_assistant.db:
-- Creates new SQLite tables without modifying existing ones
+Processes the live document and chunk inventory in the PostgreSQL database:
+- Creates new corpus_* tables without modifying existing ones
 - Generates document->tier table
 - Tags chunk modules (multiple allowed)
 - Builds exact-string identifier index
@@ -11,13 +11,17 @@ Processes the live document and chunk inventory in sap_assistant.db:
 """
 
 import os
+import re
 import json
-import sqlite3
 import random
 import numpy as np
 from typing import Dict, Any, List, Set, Tuple
 from pathlib import Path
 
+from sqlalchemy import text
+from sqlalchemy.engine import Connection, Engine
+
+from backend.app.database import engine as default_engine
 from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
 from backend.app.corpus.module_tagger import tag_chunk_modules
 from backend.app.corpus.identifier_indexer import (
@@ -27,15 +31,22 @@ from backend.app.corpus.identifier_indexer import (
     TIER_AUTHORITY_RANK
 )
 
-DB_PATH = Path(__file__).resolve().parent.parent.parent / "sap_assistant.db"
 CORPUS_DIR = Path(__file__).resolve().parent
 
+UPSERT_DOCUMENT_METADATA = text("""
+INSERT INTO corpus_document_metadata
+(id, filename, tier, is_off_domain, category, reason, page_count, chunk_count)
+VALUES (:id, :filename, :tier, :is_off_domain, :category, :reason, :page_count, :chunk_count)
+ON CONFLICT (id) DO UPDATE SET
+    filename = EXCLUDED.filename, tier = EXCLUDED.tier, is_off_domain = EXCLUDED.is_off_domain,
+    category = EXCLUDED.category, reason = EXCLUDED.reason,
+    page_count = EXCLUDED.page_count, chunk_count = EXCLUDED.chunk_count
+""")
 
-def init_corpus_tables(conn: sqlite3.Connection):
+
+def init_corpus_tables(conn: Connection):
     """Creates new tables for Phase 1 metadata without modifying existing tables."""
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    conn.execute(text("""
     CREATE TABLE IF NOT EXISTS corpus_document_metadata (
         id TEXT PRIMARY KEY,
         filename TEXT NOT NULL UNIQUE,
@@ -47,9 +58,9 @@ def init_corpus_tables(conn: sqlite3.Connection):
         chunk_count INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-    """)
+    """))
 
-    cursor.execute("""
+    conn.execute(text("""
     CREATE TABLE IF NOT EXISTS corpus_chunk_metadata (
         chunk_id TEXT PRIMARY KEY,
         document_id TEXT NOT NULL,
@@ -62,9 +73,9 @@ def init_corpus_tables(conn: sqlite3.Connection):
         primary_module TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-    """)
+    """))
 
-    cursor.execute("""
+    conn.execute(text("""
     CREATE TABLE IF NOT EXISTS corpus_identifier_index (
         identifier TEXT PRIMARY KEY, -- Exact string (no normalization)
         type TEXT NOT NULL,          -- tcode, table, report_or_fm, technical_object
@@ -74,27 +85,35 @@ def init_corpus_tables(conn: sqlite3.Connection):
         occurrence_count INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-    """)
-
-    conn.commit()
+    """))
 
 
-def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
+def build_corpus_metadata(bind: Engine = None) -> Dict[str, Any]:
     """Runs full Phase 1 metadata build and indexing."""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with (bind or default_engine).begin() as conn:
+        result = _build_corpus_tables(conn)
 
+    # Save exports
+    export_document_tiers(result["documents"])
+    export_identifier_index(result.pop("ident_export"))
+    result["gap_report"] = generate_knowledge_gap_report(bind)
+    return result
+
+
+def _build_corpus_tables(conn: Connection) -> Dict[str, Any]:
     init_corpus_tables(conn)
 
     # 1. Fetch all documents
-    db_docs = cursor.execute("SELECT id, filename, title, page_count FROM documents").fetchall()
+    db_docs = conn.execute(text("SELECT id, filename, title, page_count FROM documents")).fetchall()
     print(f"Found {len(db_docs)} documents in database.")
 
     doc_meta_rows = []
     doc_summary_list = []
 
     for doc_id, filename, title, page_count in db_docs:
-        chunk_count = cursor.execute("SELECT COUNT(*) FROM document_chunks WHERE document_id = ?", (doc_id,)).fetchone()[0]
+        chunk_count = conn.execute(
+            text("SELECT COUNT(*) FROM document_chunks WHERE document_id = :doc_id"), {"doc_id": doc_id}
+        ).scalar()
 
         tier_info = DOCUMENT_TIER_MAPPING.get(filename, {
             "tier": "self_authored",
@@ -103,16 +122,16 @@ def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
             "reason": "Default fallback"
         })
 
-        doc_meta_rows.append((
-            doc_id,
-            filename,
-            tier_info["tier"],
-            1 if tier_info["is_off_domain"] else 0,
-            tier_info.get("category", ""),
-            tier_info.get("reason", ""),
-            page_count,
-            chunk_count
-        ))
+        doc_meta_rows.append({
+            "id": doc_id,
+            "filename": filename,
+            "tier": tier_info["tier"],
+            "is_off_domain": 1 if tier_info["is_off_domain"] else 0,
+            "category": tier_info.get("category", ""),
+            "reason": tier_info.get("reason", ""),
+            "page_count": page_count,
+            "chunk_count": chunk_count,
+        })
 
         doc_summary_list.append({
             "id": doc_id,
@@ -125,20 +144,16 @@ def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
             "chunks": chunk_count
         })
 
-    cursor.executemany("""
-    INSERT OR REPLACE INTO corpus_document_metadata 
-    (id, filename, tier, is_off_domain, category, reason, page_count, chunk_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, doc_meta_rows)
-    conn.commit()
+    if doc_meta_rows:
+        conn.execute(UPSERT_DOCUMENT_METADATA, doc_meta_rows)
     print("Inserted/Updated corpus_document_metadata table.")
 
     # 2. Process all chunks and build module tags + identifier index
     print("Processing document chunks...")
-    chunks = cursor.execute("""
+    chunks = conn.execute(text("""
     SELECT id, document_id, document_name, page_number, section, chunk_text
     FROM document_chunks
-    """).fetchall()
+    """)).fetchall()
     print(f"Total chunks to process: {len(chunks)}")
 
     chunk_meta_rows = []
@@ -152,17 +167,17 @@ def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
         # Module tagging
         mods, primary_mod = tag_chunk_modules(text, doc_name)
 
-        chunk_meta_rows.append((
-            c_id,
-            d_id,
-            doc_name,
-            tier,
-            is_off_domain,
-            page_num,
-            sec or "",
-            json.dumps(mods),
-            primary_mod
-        ))
+        chunk_meta_rows.append({
+            "chunk_id": c_id,
+            "document_id": d_id,
+            "document_name": doc_name,
+            "tier": tier,
+            "is_off_domain": is_off_domain,
+            "page_number": page_num,
+            "section": sec or "",
+            "modules": json.dumps(mods),
+            "primary_module": primary_mod,
+        })
 
         # Identifier extraction (exact strings only)
         extracted = extract_chunk_identifiers(text)
@@ -187,12 +202,18 @@ def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
             identifier_dict[ident]["chunk_ids"].add(c_id)
 
     # Insert chunk metadata
-    cursor.executemany("""
-    INSERT OR REPLACE INTO corpus_chunk_metadata
-    (chunk_id, document_id, document_name, tier, is_off_domain, page_number, section, modules, primary_module)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, chunk_meta_rows)
-    conn.commit()
+    if chunk_meta_rows:
+        conn.execute(text("""
+        INSERT INTO corpus_chunk_metadata
+        (chunk_id, document_id, document_name, tier, is_off_domain, page_number, section, modules, primary_module)
+        VALUES (:chunk_id, :document_id, :document_name, :tier, :is_off_domain, :page_number, :section,
+                :modules, :primary_module)
+        ON CONFLICT (chunk_id) DO UPDATE SET
+            document_id = EXCLUDED.document_id, document_name = EXCLUDED.document_name,
+            tier = EXCLUDED.tier, is_off_domain = EXCLUDED.is_off_domain,
+            page_number = EXCLUDED.page_number, section = EXCLUDED.section,
+            modules = EXCLUDED.modules, primary_module = EXCLUDED.primary_module
+        """), chunk_meta_rows)
     print("Inserted/Updated corpus_chunk_metadata table.")
 
     # Insert identifier index
@@ -200,14 +221,14 @@ def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
     ident_export = {}
     for ident, data in identifier_dict.items():
         chunk_id_list = sorted(list(data["chunk_ids"]))
-        ident_rows.append((
-            ident,
-            data["type"],
-            data["module"],
-            data["highest_tier"],
-            json.dumps(chunk_id_list),
-            len(chunk_id_list)
-        ))
+        ident_rows.append({
+            "identifier": ident,
+            "type": data["type"],
+            "module": data["module"],
+            "tier": data["highest_tier"],
+            "chunk_ids": json.dumps(chunk_id_list),
+            "occurrence_count": len(chunk_id_list),
+        })
         ident_export[ident] = {
             "identifier": ident,
             "type": data["type"],
@@ -217,26 +238,22 @@ def build_corpus_metadata(db_path: Path = DB_PATH) -> Dict[str, Any]:
             "chunk_ids": chunk_id_list
         }
 
-    cursor.executemany("""
-    INSERT OR REPLACE INTO corpus_identifier_index
-    (identifier, type, module, tier, chunk_ids, occurrence_count)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, ident_rows)
-    conn.commit()
+    if ident_rows:
+        conn.execute(text("""
+        INSERT INTO corpus_identifier_index
+        (identifier, type, module, tier, chunk_ids, occurrence_count)
+        VALUES (:identifier, :type, :module, :tier, :chunk_ids, :occurrence_count)
+        ON CONFLICT (identifier) DO UPDATE SET
+            type = EXCLUDED.type, module = EXCLUDED.module, tier = EXCLUDED.tier,
+            chunk_ids = EXCLUDED.chunk_ids, occurrence_count = EXCLUDED.occurrence_count
+        """), ident_rows)
     print(f"Inserted/Updated corpus_identifier_index table with {len(ident_rows)} identifiers.")
-
-    conn.close()
-
-    # Save exports
-    export_document_tiers(doc_summary_list)
-    export_identifier_index(ident_export)
-    report = generate_knowledge_gap_report(db_path)
 
     return {
         "documents": doc_summary_list,
         "total_chunks": len(chunks),
         "total_identifiers": len(ident_rows),
-        "gap_report": report
+        "ident_export": ident_export,
     }
 
 
@@ -270,19 +287,17 @@ def export_identifier_index(ident_export: Dict[str, Any]):
     print(f"Exported identifier index to {json_path}")
 
 
-def generate_knowledge_gap_report(db_path: Path = DB_PATH) -> Dict[str, Any]:
+def generate_knowledge_gap_report(bind: Engine = None) -> Dict[str, Any]:
     """Generates knowledge gap report across modules and tiers."""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
     # Query chunk counts per module per tier for IN-DOMAIN documents
-    rows = cursor.execute("""
-    SELECT tier, primary_module, COUNT(*) 
-    FROM corpus_chunk_metadata
-    WHERE is_off_domain = 0
-    GROUP BY tier, primary_module
-    ORDER BY tier, primary_module
-    """).fetchall()
+    with (bind or default_engine).connect() as conn:
+        rows = conn.execute(text("""
+        SELECT tier, primary_module, COUNT(*)
+        FROM corpus_chunk_metadata
+        WHERE is_off_domain = 0
+        GROUP BY tier, primary_module
+        ORDER BY tier, primary_module
+        """)).fetchall()
 
     # Tiers and modules grid
     modules = ["SOM", "CM", "CC", "CI", "FI-CA", "RAR", "General"]
@@ -364,7 +379,6 @@ def generate_knowledge_gap_report(db_path: Path = DB_PATH) -> Dict[str, Any]:
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
 
-    conn.close()
     print(f"Generated Knowledge Gap Report at {report_path}")
     return {
         "grid": grid,
@@ -373,7 +387,7 @@ def generate_knowledge_gap_report(db_path: Path = DB_PATH) -> Dict[str, Any]:
     }
 
 
-def validate_classifier_on_hand_checked_chunks(db_path: Path = DB_PATH, n_samples: int = 50) -> Dict[str, Any]:
+def validate_classifier_on_hand_checked_chunks(bind: Engine = None, n_samples: int = 50) -> Dict[str, Any]:
     """
     Validates module classifier on 50 hand-checked chunks.
     Computes accuracy with 95% bootstrap confidence intervals.
@@ -381,18 +395,15 @@ def validate_classifier_on_hand_checked_chunks(db_path: Path = DB_PATH, n_sample
     random.seed(42)
     np.random.seed(42)
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
     # Pull 50 diverse chunks across documents
-    sample_rows = cursor.execute("""
-    SELECT c.chunk_id, c.document_name, c.page_number, d.chunk_text, c.primary_module, c.modules
-    FROM corpus_chunk_metadata c
-    JOIN document_chunks d ON c.chunk_id = d.id
-    ORDER BY RANDOM()
-    LIMIT 100
-    """).fetchall()
-    conn.close()
+    with (bind or default_engine).connect() as conn:
+        sample_rows = conn.execute(text("""
+        SELECT c.chunk_id, c.document_name, c.page_number, d.chunk_text, c.primary_module, c.modules
+        FROM corpus_chunk_metadata c
+        JOIN document_chunks d ON c.chunk_id = d.id
+        ORDER BY RANDOM()
+        LIMIT 100
+        """)).fetchall()
 
     # We select 50 chunks and construct the ground truth by expert heuristic validation
     hand_checked_set = []

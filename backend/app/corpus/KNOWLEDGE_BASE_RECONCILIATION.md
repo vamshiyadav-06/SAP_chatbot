@@ -14,6 +14,8 @@ Audit date: 2026-10-13
 ## Index inventory
 
 The local SQLite index contains 40 document records and 11,317 embedded chunks.
+(Historical figure from the audit date. Since 2026-10-16 the index lives in PostgreSQL + pgvector;
+the SQLite file was migrated without re-embedding and is no longer used by the application.)
 Ten indexed document records have no corresponding local source PDF. They are retained as
 historical index records and are surfaced as `orphaned` by `GET /api/rag-inspect/documents`;
 they must be reviewed before rebuilding the index.

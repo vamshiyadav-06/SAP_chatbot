@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from backend.app.schemas.citation import CitationResponse, WebSourceResponse, WebImageResponse
 
@@ -28,6 +28,10 @@ class DocumentExtractResponse(BaseModel):
     char_count: int
     preview: str
     text: str
+    # Images only: the question/error found in the image, and how it was read
+    # ("vision", "vision+ocr" or "ocr").
+    detected_question: Optional[str] = None
+    analysis_method: Optional[str] = None
 
 
 class UploadedAttachmentInfo(BaseModel):
@@ -40,6 +44,11 @@ class UploadedAttachmentInfo(BaseModel):
 class MessageCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=200000)
     attachments: Optional[List[DocumentAttachment]] = Field(default=None, max_length=5)
+
+
+class MessageFeedback(BaseModel):
+    # None clears the rating.
+    value: Optional[Literal["up", "down"]] = None
 
 
 class MessageResponse(BaseModel):
@@ -63,5 +72,6 @@ class MessageResponse(BaseModel):
     images: List[WebImageResponse] = []
     follow_up_questions: List[str] = []
     attachments: Optional[List[UploadedAttachmentInfo]] = None
+    feedback: Optional[Literal["up", "down"]] = None
 
     model_config = ConfigDict(from_attributes=True)

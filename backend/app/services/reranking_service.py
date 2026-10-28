@@ -150,8 +150,12 @@ class RerankingService:
             w_copy["rerank_score"] = final_web_score
             w_copy["vector_score"] = round(min(1.0, coverage + 0.1), 4)
             w_copy["keyword_score"] = round(coverage, 4)
-            # Standardize chunk_text for downstream LLM & grounding services
-            w_copy["chunk_text"] = f"{item.get('title', '')}: {item.get('snippet', '')}"
+            # Standardize chunk_text for downstream LLM & grounding services, keeping
+            # passages extracted from the page content when the search provided them.
+            if item.get("content_extracted") and item.get("chunk_text"):
+                w_copy["chunk_text"] = item["chunk_text"]
+            else:
+                w_copy["chunk_text"] = f"{item.get('title', '')}: {item.get('snippet', '')}"
             scored_web.append(w_copy)
 
         scored_web.sort(key=lambda x: x["rerank_score"], reverse=True)

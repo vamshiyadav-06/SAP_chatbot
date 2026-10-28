@@ -1,0 +1,74 @@
+# SearXNG configuration for SAP Knowledge Assistant (SearXNG + Siftdog integration)
+# Inherits SearXNG defaults and enables JSON API format, disables rate limiting for internal calls,
+# and configures engines across general search, news, images, and technical documentation.
+
+use_default_settings: true
+
+server:
+  # Secret key can be overridden via SEARXNG_SECRET in docker-compose / .env
+  secret_key: ""
+  limiter: false       # Disable bot rate limiter for service-to-service API communication
+  image_proxy: false   # Return direct image URLs to client
+  method: "GET"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json             # Mandatory for programmatic API access by Siftdog and backend
+
+# Upstream search engines configuration
+# Enables multiple independent engines to provide high availability and avoid single-engine rate limits
+engines:
+  # General Web Search
+  - name: google
+    engine: google
+    shortcut: go
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: false
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    disabled: false
+  - name: mojeek
+    engine: mojeek
+    shortcut: mj
+    disabled: false
+
+  # News Search
+  - name: google news
+    engine: google_news
+    shortcut: gon
+    disabled: false
+  - name: duckduckgo news
+    engine: duckduckgo_news
+    shortcut: ddn
+    disabled: false
+
+  # Image Search
+  - name: google images
+    engine: google_images
+    shortcut: goi
+    disabled: false
+  - name: bing images
+    engine: bing_images
+    shortcut: bii
+    disabled: false
+  - name: duckduckgo images
+    engine: duckduckgo_images
+    shortcut: ddi
+    disabled: false
+
+  # IT & Developer Documentation
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false

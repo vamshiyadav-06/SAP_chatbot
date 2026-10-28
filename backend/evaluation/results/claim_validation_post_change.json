@@ -1,0 +1,511 @@
+{
+  "label": "post_change",
+  "generated_at": "2026-10-15T11:18:27.452320+00:00",
+  "cases": 19,
+  "claim_label_accuracy": 1.0,
+  "evidence_coverage_supported_recognised": 1.0,
+  "unsupported_claim_detection": 1.0,
+  "qualified_statements_not_penalised": 1.0,
+  "detection_by_failure_kind": {
+    "causal": 1.0,
+    "citation": 1.0,
+    "conflict": 1.0,
+    "contradicted": 1.0,
+    "fabricated": 1.0,
+    "field_meaning": 1.0,
+    "operation": 1.0,
+    "path": 1.0,
+    "release": 1.0,
+    "unsafe": 1.0,
+    "unsupported": 1.0
+  },
+  "technical_identifier_recall": 1.0,
+  "technical_identifier_false_flag_rate": 0.0,
+  "contradiction_detection": 1.0,
+  "citation_mismatch_detection": 1.0,
+  "citation_false_alarm_rate": 0.0,
+  "release_mismatch_detection": 1.0,
+  "source_authority_classification": 1.0,
+  "publication_decision_accuracy": 1.0,
+  "false_acceptance_rate": 0.0,
+  "false_rejection_rate": 0.0,
+  "repair_success": 1.0,
+  "api_streaming_compatibility": 1.0,
+  "by_level": {
+    "simple": {
+      "publication_decision_accuracy": 1.0,
+      "claim_label_accuracy": 1.0,
+      "cases": 6
+    },
+    "intermediate": {
+      "publication_decision_accuracy": 1.0,
+      "claim_label_accuracy": 1.0,
+      "cases": 6
+    },
+    "advanced": {
+      "publication_decision_accuracy": 1.0,
+      "claim_label_accuracy": 1.0,
+      "cases": 7
+    }
+  },
+  "counts": {
+    "claims_total": 43,
+    "claims_correct": 43,
+    "supported_total": 24,
+    "supported_recognised": 24,
+    "not_supported_total": 16,
+    "not_supported_detected": 16,
+    "qualified_total": 3,
+    "qualified_not_penalised": 3,
+    "citation_mismatch_total": 1,
+    "citation_mismatch_detected": 1,
+    "citation_correct_total": 23,
+    "citation_false_alarms": 0,
+    "release_mismatch_total": 1,
+    "release_mismatch_detected": 1,
+    "contradiction_total": 1,
+    "contradiction_detected": 1,
+    "ids_flag_total": 9,
+    "ids_flag_detected": 9,
+    "ids_ok_total": 9,
+    "ids_ok_false_flags": 0,
+    "gate_total": 19,
+    "gate_correct": 19,
+    "bad_answers": 13,
+    "bad_published_verified": 0,
+    "good_answers": 6,
+    "good_rejected": 0,
+    "repair_total": 3,
+    "repair_success": 3,
+    "compat_total": 4,
+    "compat_pass": 4,
+    "authority_total": 6,
+    "authority_correct": 6
+  },
+  "details": [
+    {
+      "id": "S1",
+      "level": "simple",
+      "gate": true,
+      "score": 0.94,
+      "claims": [
+        {
+          "fragment": "called billable items",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "processing status billable or raw",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "S2",
+      "level": "simple",
+      "gate": false,
+      "score": 0.56,
+      "claims": [
+        {
+          "fragment": "status billable or raw",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "DFKKBIXBIT9",
+          "expected": "not_supported",
+          "status": "unsupported",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "S3",
+      "level": "simple",
+      "gate": true,
+      "score": 0.94,
+      "claims": [
+        {
+          "fragment": "closed automatically at the end",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "must be closed manually",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "level": "simple",
+      "gate": false,
+      "score": 0.66,
+      "claims": [
+        {
+          "fragment": "closed automatically at the end",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "triggers the immediate transfer",
+          "expected": "not_supported",
+          "status": "unsupported_causal",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "R1",
+      "level": "simple",
+      "gate": false,
+      "score": 0.2,
+      "claims": [
+        {
+          "fragment": "FAKE_TRANSACTION_999",
+          "expected": "not_supported",
+          "status": "unverified_procedure",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "R2",
+      "level": "simple",
+      "gate": false,
+      "score": 0.66,
+      "claims": [
+        {
+          "fragment": "provides rating",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "quantum computers",
+          "expected": "not_supported",
+          "status": "unsupported_causal",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "I1",
+      "level": "intermediate",
+      "gate": true,
+      "score": 0.94,
+      "claims": [
+        {
+          "fragment": "FP03E or in mass release",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "periodic submission flow",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "collection agency item (DFKKCOLL)",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "I2",
+      "level": "intermediate",
+      "gate": false,
+      "score": 0.56,
+      "claims": [
+        {
+          "fragment": "released for submission individually",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "recall a receivable",
+          "expected": "not_supported",
+          "status": "operation_not_evidenced",
+          "ok": true
+        }
+      ],
+      "repair": {
+        "success": true,
+        "leaked": [],
+        "final_gate": true
+      }
+    },
+    {
+      "id": "I3",
+      "level": "intermediate",
+      "gate": false,
+      "score": 0.66,
+      "claims": [
+        {
+          "fragment": "prevented by locks",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "time limit",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "use transaction FKLOCK2",
+          "expected": "not_supported",
+          "status": "operation_not_evidenced",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "I4",
+      "level": "intermediate",
+      "gate": false,
+      "score": 0.66,
+      "claims": [
+        {
+          "fragment": "prevents postings, clearing",
+          "expected": "not_supported",
+          "status": "citation_mismatch",
+          "ok": true
+        },
+        {
+          "fragment": "not dunned",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "I5",
+      "level": "intermediate",
+      "gate": true,
+      "score": 0.94,
+      "claims": [
+        {
+          "fragment": "Evaluation of Business Blocks",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "select lock entries",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "I6",
+      "level": "intermediate",
+      "gate": false,
+      "score": 0.2,
+      "claims": [
+        {
+          "fragment": "Display Locks",
+          "expected": "not_supported",
+          "status": "unverified_path",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "A1",
+      "level": "advanced",
+      "gate": false,
+      "score": 0.2,
+      "claims": [
+        {
+          "fragment": "universal blocking indicator",
+          "expected": "not_supported",
+          "status": "overgeneralized_meaning",
+          "ok": true
+        },
+        {
+          "fragment": "Postings to a contract account can be prevented",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "Run transaction XK02",
+          "expected": "not_supported",
+          "status": "contradicted",
+          "ok": true
+        },
+        {
+          "fragment": "Unblock Partner",
+          "expected": "not_supported",
+          "status": "unverified_path",
+          "ok": true
+        },
+        {
+          "fragment": "SE16N",
+          "expected": "not_supported",
+          "status": "unsafe_procedure",
+          "ok": true
+        },
+        {
+          "fragment": "release all pending invoices",
+          "expected": "not_supported",
+          "status": "unsupported_causal",
+          "ok": true
+        }
+      ],
+      "repair": {
+        "success": true,
+        "leaked": [],
+        "final_gate": true
+      }
+    },
+    {
+      "id": "A1b",
+      "level": "advanced",
+      "gate": false,
+      "score": 0.2,
+      "claims": [],
+      "repair": {
+        "success": true,
+        "leaked": [],
+        "final_gate": true
+      }
+    },
+    {
+      "id": "A2",
+      "level": "advanced",
+      "gate": true,
+      "score": 0.94,
+      "claims": [
+        {
+          "fragment": "one universal Business Partner block",
+          "expected": "qualified",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "prevented by a central posting block",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "Evaluation of Business Blocks",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "blocked customer master data is identified in table KNB1",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "transaction BP",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "does not establish which transaction",
+          "expected": "qualified",
+          "status": "qualified",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "A3",
+      "level": "advanced",
+      "gate": false,
+      "score": 0.2,
+      "claims": [
+        {
+          "fragment": "can be removed via transaction XK02",
+          "expected": "not_supported",
+          "status": "needs_qualification",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "A4",
+      "level": "advanced",
+      "gate": true,
+      "score": 0.94,
+      "claims": [
+        {
+          "fragment": "states that the assignment",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "XK02 is not available",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "could not be confirmed",
+          "expected": "qualified",
+          "status": "qualified",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "A5",
+      "level": "advanced",
+      "gate": false,
+      "score": 0.2,
+      "claims": [
+        {
+          "fragment": "transaction BP",
+          "expected": "not_supported",
+          "status": "needs_qualification",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "id": "A6",
+      "level": "advanced",
+      "gate": false,
+      "score": 0.36,
+      "claims": [
+        {
+          "fragment": "stored in the collection agency item",
+          "expected": "supported",
+          "status": "supported",
+          "ok": true
+        },
+        {
+          "fragment": "using SE16N",
+          "expected": "not_supported",
+          "status": "unsafe_procedure",
+          "ok": true
+        }
+      ]
+    }
+  ]
+}

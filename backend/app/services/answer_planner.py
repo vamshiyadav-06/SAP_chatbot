@@ -1,6 +1,13 @@
 import re
 from typing import Dict, Any, List, Optional
 
+# Whole words only: substrings misroute "issued", "prefix", "unfixed" to troubleshooting.
+TROUBLESHOOTING_PATTERN = re.compile(
+    r"\b(?:errors?|fail(?:s|ed|ing|ures?)?|dumps?|troubleshoot\w*|issues?|stuck|exceptions?|cannot|can't"
+    r"|fix(?:es)?|not\s+working)\b",
+    re.I,
+)
+
 class AnswerPlanner:
     """
     Question-Aware Answer Planning Service for SAP BRIM Knowledge Assistant.
@@ -22,20 +29,85 @@ class AnswerPlanner:
     def plan_answer(query: str, is_follow_up: bool = False) -> Dict[str, Any]:
         q_lower = query.lower()
 
-        # 1. Senior SAP BRIM Upgrade, Invoice Reconciliation & Billing Discrepancy Analysis
-        is_reconciliation = any(term in q_lower for term in [
-            "reconcil", "discrepancy", "variance", "mismatch", "billing difference",
-            "invoice difference", "differ in invoice", "invoice amount", "reconciliation matrix"
-        ])
+        # 1. Complex Production Incident / Multi-Discrepancy Scenario Analysis
         is_upgrade_or_release = any(term in q_lower for term in [
             "upgrade", "support package", "sp upgrade", "release change", "old vs new",
             "old versus new", "migration difference", "release comparison", "ecc to s/4"
+        ])
+        is_reconciliation = any(term in q_lower for term in [
+            "reconcil", "discrepancy", "variance", "mismatch", "billing difference",
+            "invoice difference", "differ in invoice", "invoice amount", "reconciliation matrix"
         ])
         is_billing_or_invoice = any(term in q_lower for term in [
             "invoice", "invoicing", "billing", "billable item", "rating", "charge",
             "fi-ca", "fica", "subledger", "tax", "rounding"
         ])
+        is_solution_design = bool(re.search(
+            r"\bhow\s+would\s+you\s+design\s+(?:and\s+implement\s+)?(?:an\s+)?end-to-end\s+sap\s+brim\s+solution\b",
+            query, re.I
+        ))
+        is_production_incident = (
+            any(term in q_lower for term in [
+                "production incident", "month-end", "month end", "production failure",
+                "production issue", "posting discrepancies", "duplicate financial",
+                "duplicated financial", "recover missing", "prevent duplicate",
+                "investigate the discrepancies", "reconciliation and duplicate"
+            ])
+            or (
+                ("missing" in q_lower or "discrepanc" in q_lower or "duplicate" in q_lower)
+                and ("recover" in q_lower or "investigat" in q_lower or "safely" in q_lower)
+                and ("convergent" in q_lower or "fi-ca" in q_lower or "brim" in q_lower or "charging" in q_lower)
+            )
+        ) and not is_upgrade_or_release and not is_solution_design
 
+        if is_production_incident:
+            return {
+                "question_type": "production_incident",
+                "title": "Senior SAP BRIM Production Incident Resolution & Scenario Analysis",
+                "instructions": (
+                    "MANDATORY SENIOR ARCHITECT STRUCTURE (SAP BRIM Production Incident & Scenario Resolution):\n"
+                    "Structure your response using the following comprehensive 10-section framework:\n\n"
+                    "### 1. Executive Summary\n"
+                    "- Explain the problem, the core architectural assessment, and the recommended approach.\n"
+                    "- State clearly what is known from evidence and what remains uncertain.\n\n"
+                    "### 2. Problem Analysis\n"
+                    "- Break the scenario into individual symptoms (e.g. missing billable items, posting discrepancies, duplicate records).\n"
+                    "- Identify all affected SAP BRIM components (e.g. CC, CI, FI-CA).\n"
+                    "- Explain the relationships between the symptoms without assuming an unverified common cause.\n\n"
+                    "### 3. Evidence and Findings\n"
+                    "- Present relevant technical information retrieved from the knowledge base and official documentation.\n"
+                    "- Reference source documents, page numbers, or sections where available.\n"
+                    "- Distinguish documented facts, observed evidence, and hypotheses.\n\n"
+                    "### 4. Root-Cause Analysis\n"
+                    "- Explain plausible root causes for each identified symptom category.\n"
+                    "- Describe the evidence needed to confirm or eliminate each cause.\n"
+                    "- Never present an unverified hypothesis as a confirmed root cause.\n\n"
+                    "### 5. Step-by-Step Investigation\n"
+                    "- Explain the investigation sequence in priority order.\n"
+                    "- Identify relevant transaction codes, logs, status monitors, reconciliation checks, and interfaces where supported by documentation.\n"
+                    "- Explain the specific purpose and diagnostic value of each step.\n\n"
+                    "### 6. Corrective and Recovery Actions\n"
+                    "- Describe the appropriate corrective actions for each confirmed failure category.\n"
+                    "- Explain prerequisites, dependencies, operational risks, and validation requirements.\n"
+                    "- Avoid recommending potentially destructive actions without sufficient evidence.\n\n"
+                    "### 7. Duplicate Prevention and Financial Integrity\n"
+                    "- Explain how to verify processing status before initiating any reprocessing or retry.\n"
+                    "- Include reconciliation and duplicate-prevention checks when relevant.\n"
+                    "- Distinguish missing transactions, delayed processing, failed processing, and duplicate transactions.\n\n"
+                    "### 8. Validation and Reconciliation\n"
+                    "- Explain how to confirm that the issue is fully resolved across all components.\n"
+                    "- Include relevant counts, monetary totals, status checks, and financial reconciliation between CC, CI, and FI-CA.\n\n"
+                    "### 9. Risks and Limitations\n"
+                    "- Identify unresolved questions, operational risks, and system assumptions.\n"
+                    "- Clearly state when the available documentation does not establish a specific procedure or parameter.\n\n"
+                    "### 10. Final Recommendations\n"
+                    "- Summarize the immediate next steps in prioritized order.\n"
+                    "- Provide useful, targeted follow-up questions to clarify any remaining implementation details.\n"
+                    "CRITICAL: Ground all technical statements strictly in retrieved evidence. Never fabricate SAP transaction codes, tables, or procedures."
+                )
+            }
+
+        # 2. Senior SAP BRIM Upgrade, Invoice Reconciliation & Billing Discrepancy Analysis
         if (is_reconciliation and is_billing_or_invoice) or (is_upgrade_or_release and (is_billing_or_invoice or is_reconciliation)):
             return {
                 "question_type": "upgrade_invoice_reconciliation",
@@ -85,7 +157,28 @@ class AnswerPlanner:
                 )
             }
 
-        # 2. Comparison questions
+        # 2. Blocks, locks and restrictions (BP, customer, supplier, org-level, FI-CA)
+        from backend.app.services.restriction_scope_classifier import restriction_scope_classifier
+        scope = restriction_scope_classifier.classify(query)
+        if scope.is_restriction_query:
+            return {
+                "question_type": "restriction_block",
+                "title": "Block / Restriction Diagnosis",
+                "instructions": (
+                    "STRUCTURE REQUIREMENT (Block or Restriction):\n"
+                    "1. Direct answer: state whether the evidence identifies ONE block type or several possible ones.\n"
+                    "2. Block-type scope: for each block type the evidence covers, give the business object, role and "
+                    "organizational level it applies to, and what the cited passage establishes (cite [E#]).\n"
+                    "3. Where it can be viewed: only locations documented in a cited passage, per block type.\n"
+                    "4. How it is removed or changed: only procedures a cited passage documents for that exact block type. "
+                    "If none is documented, say the removal procedure is not established by the evidence. Never suggest "
+                    "direct table edits.\n"
+                    "5. Unresolved points and one targeted clarification question when the block type or release is unknown.\n"
+                    "Omit any section the evidence cannot support; do not fill it with generic SAP knowledge."
+                ),
+            }
+
+        # 3. Comparison questions
         if any(term in q_lower for term in ["difference between", "compare", "versus", " vs ", "diff between", "comparison"]):
             return {
                 "question_type": "comparison",
@@ -135,7 +228,7 @@ class AnswerPlanner:
             }
 
         # 4. Troubleshooting questions
-        if any(term in q_lower for term in ["error", "fail", "failed", "dump", "troubleshoot", "issue", "stuck", "exception", "cannot", "fix"]):
+        if TROUBLESHOOTING_PATTERN.search(q_lower):
             return {
                 "question_type": "troubleshooting",
                 "title": "Troubleshooting & Diagnostics",

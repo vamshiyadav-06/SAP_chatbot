@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, ShieldCheck, Mail, Lock, User, Sparkles, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ShieldCheck, Mail, Lock, User, AlertCircle } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BrandLogo } from '../components/navbar/BrandLogo';
 import { PageMeta } from '../components/ui/PageMeta';
 import { useAuth } from '../context/AuthContext';
 
 export const LoginPage: React.FC = () => {
-  const { user, login, register, guestLogin } = useAuth();
+  const { user, login, register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -29,7 +29,7 @@ export const LoginPage: React.FC = () => {
 
   // If already logged in with a real registered account, redirect to workspace
   React.useEffect(() => {
-    if (user && !user.isGuest && user.email !== 'consultant@clyptusap.ai') {
+    if (user) {
       navigate('/app', { replace: true });
     }
   }, [user, navigate]);
@@ -49,18 +49,6 @@ export const LoginPage: React.FC = () => {
       navigate('/app', { replace: true });
     } catch (err: any) {
       setError(err.message || 'Authentication failed. Please verify credentials or try Demo Access.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDemoAccess = async () => {
-    setLoading(true);
-    try {
-      await guestLogin();
-      navigate('/app', { replace: true });
-    } catch {
-      navigate('/app', { replace: true });
     } finally {
       setLoading(false);
     }
@@ -187,30 +175,11 @@ export const LoginPage: React.FC = () => {
               </button>
             </form>
 
-            <div className="relative my-5">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-200 dark:border-slate-700" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-wider text-slate-400">
-                <span className="bg-[#f8f8f6] dark:bg-[#191a18] px-2">or quick access</span>
-              </div>
-            </div>
-
-            {/* Quick Demo Access */}
-            <button
-              type="button"
-              onClick={handleDemoAccess}
-              className="button button-outline w-full flex items-center justify-center gap-2 border-dashed border-slate-400 hover:border-slate-600 transition cursor-pointer"
-            >
-              <Sparkles size={14} className="text-orange-500" />
-              <span>Instant Test Drive (1-Click Guest)</span>
-            </button>
-
             <div className="login-safe">
               <ShieldCheck size={15} />
               <span>
                 Enterprise Security &amp; JWT isolation<br />
-                <small>Connected to FastAPI &amp; PostgreSQL/SQLite RAG backend</small>
+                <small>Connected to FastAPI &amp; PostgreSQL + pgvector RAG backend</small>
               </span>
             </div>
           </div>
