@@ -1,5 +1,9 @@
+import json
 import logging
 import re
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Generator, Optional
 from sqlalchemy.orm import Session
 
@@ -11,11 +15,56 @@ from backend.app.services.grounding_service import grounding_service
 from backend.app.services.web_search_service import web_search_service
 from backend.app.services.evidence_selection_service import evidence_selection_service
 from backend.app.services.answer_planner import answer_planner
+from backend.app.services.answer_style_router import answer_style_router, is_solution_design_question
 from backend.app.services.followup_service import followup_service
-from backend.app.services.llm_service import llm_service
+from backend.app.services.llm_service import (
+    GenerationResult,
+    UNAVAILABLE_RESPONSE,
+    llm_service,
+    filter_generated_links,
+)
 from backend.app.services.query_rewriter import query_rewriter
+from backend.app.services.restriction_scope_classifier import restriction_scope_classifier, RestrictionScope
+from backend.app.services.sap_identifier_validator import sap_identifier_validator
+from backend.app.services.evidence_markers import (
+    assign_evidence_ids,
+    valid_ids,
+    remove_invalid_markers,
+    strip_markers,
+)
+from backend.app.services.answer_guard import apply_guard
+from backend.app.services import confidence_scoring
+from backend.app.services.conversation_memory_service import conversation_memory_service, MemoryIntent
+from backend.app.services.query_router import query_router, QueryRoute
+from backend.app.security.access import retrieval_groups
+from backend.app.security.log_safety import privacy_fingerprint
 
 logger = logging.getLogger(__name__)
+
+# Scenario questions list their topics in one sentence: "a solution covering SOM, CC rating, ..., while
+# handling billing discrepancies and production failures". Each topic is retrieved on its own.
+_TOPIC_LIST_LEAD = re.compile(r"^.*?\b(?:covering|including|spanning|across|involving|comprising|such\s+as)\s+", re.I)
+_TOPIC_SEPARATOR = re.compile(
+    r",\s*(?:and\s+|or\s+)?|\s+while\s+(?:also\s+)?|\s+as\s+well\s+as\s+|\s+along\s+with\s+", re.I
+)
+_TOPIC_FILLER = re.compile(r"^(?:(?:and|or|also|while|handling|managing|addressing|supporting|with)\s+)+", re.I)
+_OPERATIONS_ASKED = re.compile(
+    r"\b(?:production|fail(?:s|ed|ing|ures?)?|errors?|issues?|incidents?|discrepanc(?:y|ies)|bottlenecks?"
+    r"|troubleshoot\w*|recover\w*|reprocess\w*|monitor\w*|mismatch\w*)\b",
+    re.I,
+)
+# Retrieval queries (not answer content) for the operational ground senior design answers must cover.
+OPERATIONS_ASPECTS = [
+    "SAP BRIM rating failures and rejected or duplicate usage events: detection and reprocessing",
+    "failed billing and invoicing runs in Convergent Invoicing: error billable items, monitoring and restart",
+    "reconciliation mismatches between usage, billable items, billing documents, invoicing and FI-CA postings",
+    "FI-CA posting errors from invoicing documents and how they are corrected",
+    "performance tuning of high-volume billing mass runs and parallel processing",
+]
+MAX_SCENARIO_ASPECTS = 11
+PASSAGES_PER_ASPECT = 2
+# Web/repository search runs once per part; for scenario questions only the worst-covered parts are searched.
+MAX_EXTERNAL_SEARCH_ASPECTS = 3
 
 
 class RAGService:
@@ -140,13 +189,67 @@ class RAGService:
         )
         aspects = [re.sub(r"^\s*(?:\d+[.)]|[-*])\s*", "", p).strip(" ?\n\t") for p in pieces]
         aspects = [p for p in aspects if len(p) >= 8]
-        return aspects if len(aspects) > 1 else [(query or "").strip()]
+        if len(aspects) > 1:
+            return aspects
+        return RAGService.scenario_aspects(query) or [(query or "").strip()]
 
-    def _retrieve_aspect_evidence(self, db: Session, query: str, top_k: int, *, hybrid: bool = False):
+    @staticmethod
+    def is_incident_or_multipart_question(text: str) -> bool:
+        t_low = text.lower()
+        if "what is the difference" in t_low or len(text.split()) <= 15:
+            return False
+        has_incident_signals = any(s in t_low for s in [
+            "production incident", "month-end", "month end", "production failure",
+            "posting discrepancies", "duplicate financial", "duplicated financial",
+            "missing billable items", "discrepancies independently"
+        ])
+        has_multi_issue = (
+            ("missing" in t_low or "discrepanc" in t_low)
+            and ("duplicate" in t_low or "fi-ca" in t_low or "charging" in t_low)
+            and ("recover" in t_low or "reconcil" in t_low or "investigat" in t_low)
+        )
+        return has_incident_signals or has_multi_issue
+
+    @staticmethod
+    def scenario_aspects(query: str) -> List[str]:
+        """
+        Retrieval parts for a broad design/scenario or complex incident question: the whole question,
+        its listed topics, production incident dimensions, and operations aspects. Empty for ordinary questions.
+        """
+        text = " ".join((query or "").split())
+        if is_solution_design_question(text):
+            topics = [_TOPIC_FILLER.sub("", t).strip(" ?.") for t in _TOPIC_SEPARATOR.split(_TOPIC_LIST_LEAD.sub("", text, count=1))]
+            topics = [t for t in topics if len(t) >= 3]
+            aspects = [text]
+            if len(topics) >= 2:
+                size = 1 if len(topics) <= 4 else 2
+                aspects += [f"SAP BRIM {', '.join(topics[i:i + size])}" for i in range(0, len(topics), size)]
+            if _OPERATIONS_ASKED.search(text):
+                aspects += OPERATIONS_ASPECTS
+            return aspects[:MAX_SCENARIO_ASPECTS] if len(aspects) > 1 else []
+
+        if RAGService.is_incident_or_multipart_question(text):
+            aspects = [text]
+            t_low = text.lower()
+            if "billable item" in t_low or "charging" in t_low or "invoicing" in t_low or "100,000" in t_low:
+                aspects.append("SAP Convergent Charging to Convergent Invoicing missing billable items RFC loading error")
+            if "fi-ca" in t_low or "posting" in t_low:
+                aspects.append("Convergent Invoicing to FI-CA posting discrepancies reconciliation key clearing")
+            if "duplicate" in t_low or "financial transaction" in t_low:
+                aspects.append("FI-CA duplicate financial transactions prevention and reversal checks")
+            if "recover" in t_low or "reprocess" in t_low or "safely" in t_low:
+                aspects.append("SAP BRIM safe recovery and reprocessing of missing billable items without duplication")
+            if "reconcil" in t_low or "validat" in t_low:
+                aspects.append("SAP BRIM end-to-end reconciliation matrix record counts and balance validation")
+            return aspects[:MAX_SCENARIO_ASPECTS]
+
+        return []
+
+    def _retrieve_aspect_evidence(self, db: Session, query: str, top_k: int, *, hybrid: bool = False, allowed_groups=None):
         aspects = self.split_question_aspects(query)
         if len(aspects) == 1:
             retrieve = self.retrieval.hybrid_search if hybrid else self.retrieval.retrieve
-            candidates = retrieve(db, query, top_k=top_k)
+            candidates = retrieve(db, query, top_k=top_k, allowed_groups=allowed_groups)
             ranked, score, _ = reranking_service.rerank_kb(query, candidates, top_n=settings.RERANK_TOP_K)
             for item in ranked:
                 item["question_aspect"] = query
@@ -156,7 +259,7 @@ class RAGService:
         aspect_results = []
         for aspect in aspects:
             retrieve = self.retrieval.hybrid_search if hybrid else self.retrieval.retrieve
-            candidates = retrieve(db, aspect, top_k=top_k)
+            candidates = retrieve(db, aspect, top_k=top_k, allowed_groups=allowed_groups)
             ranked, score, _ = reranking_service.rerank_kb(aspect, candidates, top_n=settings.RERANK_TOP_K)
             aspect_results.append({"aspect": aspect, "score": round(float(score), 4), "evidence_count": len(ranked)})
             for item in ranked:
@@ -168,12 +271,43 @@ class RAGService:
         combined = sorted(merged.values(), key=lambda item: float(item.get("rerank_score", item.get("score", 0))), reverse=True)
         # Use the weakest aspect match to trigger fallback rather than hiding an evidence gap in an average.
         weakest_score = min((row["score"] for row in aspect_results), default=0.0)
-        return combined[:max(settings.RERANK_TOP_K, settings.TOP_K)], weakest_score, aspect_results
+        kept = combined[:max(settings.RERANK_TOP_K, settings.TOP_K)]
+        # Every part keeps its own best passages; a global cut would drop the parts that score lower.
+        for aspect in aspects:
+            for item in [c for c in combined if c.get("question_aspect") == aspect][:PASSAGES_PER_ASPECT]:
+                if not any(k is item for k in kept):
+                    kept.append(item)
+        return kept, weakest_score, aspect_results
 
     @staticmethod
-    def _ensure_aspect_coverage(selected: List[Dict[str, Any]], internal: List[Dict[str, Any]], aspects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Keep a passage or an explicit non-citable retrieval-gap marker for each ask."""
+    def _external_search_aspects(query: str, aspect_results: List[Dict[str, Any]]) -> List[str]:
+        """Parts to search outside the knowledge base: all of them, or the worst-covered few for a scenario question."""
+        aspects = RAGService.split_question_aspects(query)
+        if len(aspects) <= MAX_EXTERNAL_SEARCH_ASPECTS or not is_solution_design_question(query):
+            return aspects
+        weakest = sorted(aspect_results, key=lambda row: (row["score"], row["evidence_count"]))
+        return [row["aspect"] for row in weakest[:MAX_EXTERNAL_SEARCH_ASPECTS]]
+
+    @staticmethod
+    def _ensure_aspect_coverage(
+        selected: List[Dict[str, Any]],
+        internal: List[Dict[str, Any]],
+        aspects: List[Dict[str, Any]],
+        interleave: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Keep a passage or an explicit non-citable retrieval-gap marker for each ask.
+        interleave: put one passage per ask first, so a context limit trims extra passages, not whole asks.
+        """
         output = list(selected or [])
+        if interleave:
+            lead, seen = [], set()
+            for row in aspects:
+                first = next((p for p in output + list(internal or []) if p.get("question_aspect") == row["aspect"]), None)
+                if first is not None and id(first) not in seen:
+                    lead.append(first)
+                    seen.add(id(first))
+            output = lead + [p for p in output if id(p) not in seen]
         for row in aspects:
             aspect = row["aspect"]
             if any(p.get("question_aspect") == aspect for p in output):
@@ -190,13 +324,204 @@ class RAGService:
                 })
         return output
 
+    # ------------------------------------------------------------------
+    # Restriction/block scope handling
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _classify_scope(query: str) -> Optional[RestrictionScope]:
+        if not getattr(settings, "RESTRICTION_SCOPE_ENABLED", True):
+            return None
+        scope = restriction_scope_classifier.classify(query)
+        return scope if scope.is_restriction_query else None
+
+    def _retrieve_scope_evidence(self, db: Session, scope: Optional[RestrictionScope], *, hybrid: bool = False,
+                                 allowed_groups=None) -> List[Dict[str, Any]]:
+        """Retrieve evidence per candidate block type with the existing hybrid retrieval + reranker."""
+        if not scope:
+            return []
+        retrieve = self.retrieval.hybrid_search if hybrid else self.retrieval.retrieve
+        per_category = max(1, int(getattr(settings, "RESTRICTION_SCOPE_PASSAGES_PER_CATEGORY", 1)))
+        passages: List[Dict[str, Any]] = []
+        for item in scope.retrieval_queries(limit=int(getattr(settings, "RESTRICTION_SCOPE_MAX_EXPANSIONS", 5))):
+            try:
+                candidates = retrieve(db, item["query"], top_k=10, allowed_groups=allowed_groups)
+                ranked, _, _ = reranking_service.rerank_kb(item["query"], candidates, top_n=per_category)
+            except Exception as exc:
+                logger.warning("Scope retrieval for %s failed: %s", item["category"], exc)
+                continue
+            for row in ranked or []:
+                tagged = dict(row)
+                tagged["restriction_scope"] = item["category"]
+                passages.append(tagged)
+        return passages
+
+    @staticmethod
+    def _ensure_scope_coverage(selected: List[Dict[str, Any]], scope_passages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add one passage per candidate block type that is not already in the selected evidence."""
+        def key(p: Dict[str, Any]) -> str:
+            return str(p.get("chunk_id") or p.get("candidate_id") or p.get("source_id") or (p.get("chunk_text") or "")[:160])
+
+        output = list(selected or [])
+        by_key = {key(p): p for p in output}
+        for passage in scope_passages:
+            existing = by_key.get(key(passage))
+            if existing is not None:
+                existing.setdefault("restriction_scope", passage.get("restriction_scope"))
+                continue
+            output.append(passage)
+            by_key[key(passage)] = passage
+        return output
+
+    @staticmethod
+    def _prepare_evidence(passages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Copy passages (retrieval caches share dicts) and number them E1..En for inline citation."""
+        prepared = [dict(p) for p in (passages or [])]
+        return assign_evidence_ids(prepared)
+
+    @staticmethod
+    def _generation_guidance(scope: Optional[RestrictionScope], passages: List[Dict[str, Any]]) -> Optional[str]:
+        parts: List[str] = []
+        if scope:
+            parts.append(scope.prompt_guidance())
+        if getattr(settings, "TECHNICAL_CLAIM_VALIDATION_ENABLED", True):
+            try:
+                conflicts = sap_identifier_validator.detect_evidence_conflicts(passages)
+            except Exception as exc:
+                logger.warning("Evidence conflict detection failed: %s", exc)
+                conflicts = []
+            if conflicts:
+                lines = ["EVIDENCE CONFLICTS (state them; scope each claim to its source/release):"]
+                for c in conflicts[:5]:
+                    lines.append(
+                        f"- {c['identifier']}: documented for use in {', '.join(c['documented_use_in'])}, "
+                        f"but described as not available/obsolete in {', '.join(c['unavailable_in'])}."
+                    )
+                parts.append("\n".join(lines))
+        return "\n\n".join(p for p in parts if p) or None
+
+    @staticmethod
+    def _verified_token_events(text: str, words_per_event: int = 8) -> Generator[Dict[str, Any], None, None]:
+        """Emit already-verified answer text as token events, a few words at a time."""
+        pieces = re.findall(r"\S+\s*|\s+", text or "")
+        for i in range(0, len(pieces), words_per_event):
+            yield {"type": "token", "content": "".join(pieces[i:i + words_per_event])}
+
+    @staticmethod
+    def _verification_rank(verification: Dict[str, Any]):
+        critical = len(verification.get("critical_failures") or []) + len(verification.get("contradicted_claims") or [])
+        return (critical, -float(verification.get("grounding_score") or 0.0))
+
+    def _finalize_answer(
+        self,
+        query: str,
+        answer: str,
+        passages: List[Dict[str, Any]],
+        source_type: str,
+        scope: Optional[RestrictionScope],
+        guidance: Optional[str],
+        verification: Optional[Dict[str, Any]] = None,
+        answer_plan=None,
+    ):
+        """Verify -> repair once -> deterministic guard -> re-verify before publication."""
+        if verification is None:
+            verification = grounding_service.verify_answer(query, answer, passages, source_type=source_type)
+        repair = {"attempted": False, "adopted": False, "guard_applied": False, "removed_claims": 0}
+        final_answer = answer
+
+        if not verification.get("passes_grounding_gate") and settings.MAX_GROUNDING_REPAIR_ATTEMPTS > 0:
+            repair["attempted"] = True
+            repaired = llm_service.repair_answer(
+                query=query,
+                candidate_answer=answer,
+                unsupported_claims=verification.get("unsupported_claims", []),
+                critical_unsupported_ids=verification.get("critical_unsupported_claims", []),
+                evidence=passages,
+                source_type=source_type,
+                critical_failures=verification.get("critical_failures", []),
+                guidance=guidance,
+                answer_plan=answer_plan,
+            )
+            if repaired and len(repaired.strip()) > 30 and repaired.strip() != (answer or "").strip():
+                repaired_verification = grounding_service.verify_answer(query, repaired, passages, source_type=source_type)
+                # Never publish a repair that is worse than the candidate it replaces.
+                if self._verification_rank(repaired_verification) <= self._verification_rank(verification):
+                    final_answer, verification = repaired, repaired_verification
+                    repair["adopted"] = True
+
+        if verification.get("critical_failures") or verification.get("contradicted_claims"):
+            guarded = apply_guard(
+                final_answer,
+                verification,
+                allowed_evidence_ids=valid_ids(passages),
+                clarification_question=scope.clarification_question if scope else None,
+                evidence_needed=scope.evidence_needed if scope and scope.ambiguous else None,
+            )
+            if guarded["applied"]:
+                final_answer = guarded["answer"]
+                # Revalidate the degraded answer before it is published.
+                verification = grounding_service.verify_answer(query, final_answer, passages, source_type=source_type)
+                repair["guard_applied"] = True
+                repair["removed_claims"] = len(guarded["removed_claims"])
+
+        final_answer = remove_invalid_markers(final_answer, valid_ids(passages))
+        if not getattr(settings, "INLINE_EVIDENCE_MARKERS_ENABLED", True):
+            final_answer = strip_markers(final_answer)
+
+        status = verification.get("verification_status", "partial")
+        if repair["guard_applied"] and status == "verified":
+            # The original procedure was not verified; only a reduced answer is.
+            status = "partial"
+        final_answer = filter_generated_links(final_answer)
+        return final_answer, verification, repair, status
+
+    @staticmethod
+    def _attach_answer_style(validation_audit, answer_plan) -> None:
+        """Record the layout decision in the admin-only audit (never sent to regular users)."""
+        if isinstance(validation_audit, dict) and answer_plan is not None:
+            validation_audit["answer_style"] = answer_plan.model_dump()
+
+    def _validation_audit(self, query, document_match_score, passages, verification, aspects, scope, repair) -> Dict[str, Any]:
+        try:
+            report = confidence_scoring.build_report(
+                retrieval_relevance=document_match_score,
+                passages=passages,
+                verification=verification,
+                aspects=aspects,
+                scope=scope,
+                repair=repair,
+            )
+            confidence_scoring.log_report(report, query)
+            return report
+        except Exception as exc:
+            logger.warning("Validation audit could not be built: %s", exc)
+            return {"decision": "unknown", "error": str(exc)}
+
     @staticmethod
     def _should_auto_compare(document_match_score: float, confidence_data: Dict[str, Any]) -> bool:
+        """Weak document evidence may trigger the GitHub/web comparator, but only when an operator has
+        explicitly enabled an extra source (AUDIT_REPORT F-49); the default flags never do."""
         threshold = float(getattr(settings, "DOCUMENT_MATCH_THRESHOLD", 0.80))
+        sources_enabled = bool(
+            getattr(settings, "REPO_SOURCE_ENABLED", False) or getattr(settings, "MULTI_SOURCE_COMPARE_ENABLED", False)
+        )
         return bool(
             getattr(settings, "AUTO_MULTI_SOURCE_FALLBACK", True)
+            and sources_enabled
             and (
                 float(document_match_score) < threshold
+                or confidence_data.get("should_trigger_tavily", False)
+            )
+        )
+
+    @staticmethod
+    def _should_trigger_web_fallback(document_match_score: float, confidence_data: Dict[str, Any]) -> bool:
+        """Search the web when retrieval is weak, independently of repository comparison settings."""
+        return bool(
+            getattr(settings, "AUTO_MULTI_SOURCE_FALLBACK", True)
+            and getattr(settings, "WEB_FALLBACK_ENABLED", True)
+            and (
+                float(document_match_score) < float(getattr(settings, "DOCUMENT_MATCH_THRESHOLD", 0.80))
                 or confidence_data.get("should_trigger_tavily", False)
             )
         )
@@ -241,7 +566,9 @@ class RAGService:
         snippet = (raw_chunk.get("snippet") or raw_chunk.get("chunk_text") or "").replace("\ufffd", "-").strip()
         return {
             "source_type": "knowledge_base",
-            "chunk_id": str(raw_chunk.get("chunk_id") or raw_chunk.get("id") or ""),
+            # Normalized evidence keeps the chunk ID as source_id; without it, distinct chunks
+            # from the same page would be merged into one citation by _dedupe_citations.
+            "chunk_id": str(raw_chunk.get("chunk_id") or raw_chunk.get("id") or raw_chunk.get("source_id") or ""),
             "document": document,
             "page": page,
             "section": raw_chunk.get("section", "") or f"Page {page}",
@@ -293,12 +620,39 @@ class RAGService:
         self,
         query: str,
         passages: List[Dict[str, Any]],
-        source_type: str = "knowledge_base"
+        source_type: str = "knowledge_base",
+        guidance: Optional[str] = None,
+        answer_plan=None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        historical_memory: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generates candidate answer and runs claim grounding verification."""
+        generation = GenerationResult()
         candidate_answer = llm_service.generate_answer(
-            query, passages, source_type=source_type
+            query, passages, source_type=source_type, guidance=guidance, answer_plan=answer_plan,
+            chat_history=chat_history, historical_memory=historical_memory, summary=summary,
+            result=generation,
         )
+        if generation.available is False:
+            return {
+                "answer": UNAVAILABLE_RESPONSE,
+                "grounded_score": None,
+                "verification_status": "unavailable",
+                "passes_grounding_gate": False,
+                "unsupported_claims": [],
+                "critical_unsupported_claims": [],
+                "citations": [],
+                "insufficient_evidence": not bool(passages),
+                "verification": {
+                    "grounding_score": None,
+                    "verification_status": "unavailable",
+                    "passes_grounding_gate": False,
+                    "unsupported_claims": [],
+                    "critical_unsupported_claims": [],
+                },
+                "generation": generation,
+            }
         verification = grounding_service.verify_answer(
             query, candidate_answer, passages, source_type=source_type
         )
@@ -311,6 +665,90 @@ class RAGService:
             "critical_unsupported_claims": verification.get("critical_unsupported_claims", []),
             "citations": [],
             "insufficient_evidence": not bool(passages),
+            "verification": verification,
+            "generation": generation,
+        }
+
+    @staticmethod
+    def _generation_diagnostics(
+        generation: GenerationResult,
+        retrieved: List[Dict[str, Any]],
+        passages: List[Dict[str, Any]],
+        final_answer: str,
+        candidate_answer: str,
+        repair_info: Dict[str, Any],
+        answer_plan,
+        elapsed_ms: float,
+    ) -> Dict[str, Any]:
+        """Admin-only diagnostics for one answer, from this request's own GenerationResult."""
+        return {
+            "correlation_id": str(uuid.uuid4()),
+            "model_used": generation.model,
+            "provider_used": generation.provider,
+            "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
+            "retrieved_chunks_count": len(retrieved),
+            "final_context_chunks_count": len(passages),
+            "estimated_input_tokens": generation.estimated_input_tokens,
+            "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
+            "configured_output_token_limit": generation.max_output_tokens,
+            "finish_reason": generation.finish_reason,
+            "is_truncated": generation.is_truncated,
+            "was_continued": generation.was_continued,
+            "failed_over": generation.failed_over,
+            "generation_available": generation.available,
+            "failure_category": generation.failure_category,
+            "providers_considered": list(generation.providers_considered),
+            "providers_attempted": list(generation.providers_attempted),
+            "post_processing_modified": bool(repair_info.get("guard_applied", False) or final_answer != candidate_answer),
+            "elapsed_time_ms": elapsed_ms,
+        }
+
+    def _unavailable_result(
+        self,
+        *,
+        route: str,
+        generation: GenerationResult,
+        retrieved: List[Dict[str, Any]],
+        passages: List[Dict[str, Any]],
+        answer_plan,
+        elapsed_ms: float,
+        kb_score: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Stable API-compatible response when generation or grounding cannot produce an answer."""
+        diagnostics = self._generation_diagnostics(
+            generation, retrieved, passages, UNAVAILABLE_RESPONSE, "", {"attempted": False}, answer_plan, elapsed_ms
+        )
+        diagnostics["failure_category"] = generation.failure_category or "verification_rejected"
+        return {
+            "answer": UNAVAILABLE_RESPONSE,
+            "route": route,
+            "source_type": "unavailable",
+            "grounding_score": None,
+            "grounded_score": None,
+            "is_in_rag_pipeline": False,
+            "kb_score": round(kb_score, 4),
+            "web_score": 0.0,
+            "winning_score": 0.0,
+            "source_scores": {},
+            "selected_source": "unavailable",
+            "verification_status": "unavailable",
+            "internal_evidence_confidence": None,
+            "selected_evidence_quality": 0.0,
+            "external_search_used": False,
+            "citations": [],
+            "web_sources": [],
+            "images": [],
+            "follow_up_questions": [],
+            "selection_summary": "A verified response could not be generated.",
+            "model_used": generation.model,
+            "provider_used": generation.provider,
+            "failed_over": generation.failed_over,
+            "regeneration_count": 0,
+            "shadow_audit": None,
+            "comparison_audit": None,
+            "answer_decision": "unavailable",
+            "validation_audit": {"decision": "unavailable"},
+            "diagnostics": diagnostics,
         }
 
     def query(self, query: str, db: Optional[Session] = None) -> Dict[str, Any]:
@@ -332,55 +770,364 @@ class RAGService:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         user: Optional[Any] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        chat_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronous execution of the verified RAG pipeline with enterprise security enforcement."""
+        start_time = time.perf_counter()
         # 0. Resolve user identity and role
-        user_role = getattr(user, "role", "consultant") if user else "consultant"
         user_id = getattr(user, "id", None) if user else None
-        user_email = getattr(user, "email", None) if user else None
+        # Document-level access control: only documents sharing the caller's groups are retrieved (F-01).
+        access_groups = retrieval_groups(user)
         has_attachments = bool(attachments)
 
-        # 1. Conversational & Sentimental Inquiries (Routed to Dedicated Key)
-        if not has_attachments and sap_classifier.is_conversational_or_greeting(query):
-            logger.info(f"Routing conversational query '{query}' to dedicated conversational LLM tier.")
-            conversational_reply = llm_service.generate_conversational_reply(query, chat_history=chat_history)
+        # Strict 20-message conversation context window
+        if chat_id and chat_history is None:
+            chat_history = conversation_memory_service.get_recent_messages(db, chat_id, limit=20)
+        elif chat_history:
+            chat_history = chat_history[-20:]
+
+        summary = conversation_memory_service.get_chat_summary(db, chat_id) if chat_id else None
+        historical_memory: List[Dict[str, Any]] = []
+
+        # Check for conversation memory intent (exact first question, history recall, cross-conversation)
+        memory_intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
+
+        if memory_intent == MemoryIntent.FIRST_MESSAGE_LOOKUP:
+            first_msg = conversation_memory_service.get_first_user_message(db, chat_id) if chat_id else None
+            if first_msg:
+                first_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", first_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = first_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(first_msg["created_at"], datetime) else str(first_msg["created_at"])
+                ans_text = (
+                    f"Your first question in this chat was:\n\n"
+                    f"> \"{first_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{first_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no previous questions recorded in this conversation."
+
             follow_ups = followup_service.generate_starter_followups()
             return {
-                "answer": conversational_reply,
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved first user question from conversation history."
+            }
+
+        if memory_intent == MemoryIntent.LAST_MESSAGE_LOOKUP:
+            last_msg = conversation_memory_service.get_last_user_message(db, chat_id) if chat_id else None
+            if last_msg:
+                last_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", last_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = last_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(last_msg["created_at"], datetime) else str(last_msg["created_at"])
+                ans_text = (
+                    f"Your last question prior to this was:\n\n"
+                    f"> \"{last_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{last_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no prior messages found in this conversation."
+
+            follow_ups = followup_service.generate_starter_followups()
+            return {
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved last message directly from conversation history."
+            }
+
+        if memory_intent == MemoryIntent.CROSS_CONVERSATION_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=True, top_k=5
+            )
+            if not hist_msgs:
+                ans_text = "I searched your other conversations, but could not find any earlier discussion matching your query."
+                return {
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": None,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "unverified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched other conversations; no matching records found."
+                }
+            generation = GenerationResult()
+            recalled_ans = llm_service.generate_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
+            )
+            if generation.available is False:
+                return self._unavailable_result(
+                    route="conversation_memory", generation=generation, retrieved=hist_msgs, passages=[],
+                    answer_plan=None, elapsed_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                )
+            return {
+                "answer": recalled_ans,
+                "source_type": "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from cross-conversation memory."
+            }
+
+        if memory_intent == MemoryIntent.HISTORY_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+            if not hist_msgs and not chat_history:
+                ans_text = "I reviewed our conversation history, but could not find any previous mention of that in our messages."
+                return {
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": None,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "unverified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched conversation history; no matching records found."
+                }
+            generation = GenerationResult()
+            recalled_ans = llm_service.generate_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
+            )
+            if generation.available is False:
+                return self._unavailable_result(
+                    route="conversation_memory", generation=generation, retrieved=hist_msgs, passages=[],
+                    answer_plan=None, elapsed_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                )
+            return {
+                "answer": recalled_ans,
+                "source_type": "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from historical conversation memory."
+            }
+
+        if memory_intent == MemoryIntent.MIXED:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            historical_memory = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+
+        # 1. Intelligent Query Routing Execution
+        routing_decision = query_router.route(query, chat_history=chat_history)
+        selected_route = routing_decision.route
+        logger.info(
+            f"[QueryRouter] Query: '{query[:60]}' | Route: {selected_route.value} | "
+            f"Requires Retrieval: {routing_decision.requires_retrieval} | Streamed: False"
+        )
+
+        # Path A: Sentimental and Casual Questions -> Direct LLM (Bypass RAG completely)
+        if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
+            logger.info("RAG route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            emotional_reply = llm_service.generate_emotional_casual_reply(query, chat_history=chat_history)
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: EMOTIONAL_CASUAL | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: False"
+            )
+            return {
+                "answer": emotional_reply,
                 "source_type": "conversational",
-                "grounding_score": 1.0,
+                "grounding_score": None,
                 "is_in_rag_pipeline": False,
                 "kb_score": 0.0,
                 "web_score": 0.0,
                 "winning_score": 0.0,
-                "selected_source": "conversational_assistant",
-                "verification_status": "verified",
+                "selected_source": "conversational",
+                "route": selected_route.value,
+                "verification_status": "unverified",
                 "internal_evidence_confidence": 0.0,
                 "selected_evidence_quality": 0.0,
                 "external_search_used": False,
                 "citations": [],
                 "web_sources": [],
                 "follow_up_questions": follow_ups,
-                "selection_summary": "Handled via dedicated conversational assistant introducing SAP BRIM."
+                "selection_summary": "Handled directly via LLM without retrieval (emotional/casual query)."
             }
 
-        # 2. Query Resolution & Follow-Up Check
+        # Path B: Simple Conceptual SAP Questions -> Direct LLM (Bypass RAG completely)
+        if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.SIMPLE_SAP:
+            logger.info("RAG route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            simple_sap_reply = llm_service.generate_simple_sap_reply(query, chat_history=chat_history)
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: SIMPLE_SAP | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: False"
+            )
+            return {
+                "answer": simple_sap_reply,
+                "source_type": "direct_llm",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM without retrieval (simple conceptual SAP question)."
+            }
+
+        # Mixed Queries with Simple SAP Technical Part -> Direct LLM with brief acknowledgment
+        if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            tech_q = routing_decision.technical_part or query
+            logger.info("RAG route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            tech_reply = llm_service.generate_simple_sap_reply(tech_q, chat_history=chat_history)
+            combined_answer = f"{ack} {tech_reply}".strip()
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: MIXED_QUERY (Simple) | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: False"
+            )
+            return {
+                "answer": combined_answer,
+                "source_type": "direct_llm",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM with emotional acknowledgment and simple SAP answer."
+            }
+
+        # Retrieval-backed answer: one implementation shared with stream_query (F-27).
+        return self._drain(self._answer_pipeline(
+            db, query, chat_history=chat_history, attachments=attachments, summary=summary,
+            historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
+            access_groups=access_groups,
+            streamed=False,
+        ))
+
+    @staticmethod
+    def _drain(events: Generator[Dict[str, Any], None, Dict[str, Any]]) -> Dict[str, Any]:
+        """Run an event generator to completion and return its result (status events are dropped)."""
+        while True:
+            try:
+                next(events)
+            except StopIteration as stop:
+                return stop.value
+
+    def _answer_pipeline(
+        self,
+        db: Session,
+        query: str,
+        *,
+        chat_history: Optional[List[Dict[str, Any]]],
+        attachments: Optional[List[Dict[str, Any]]],
+        summary: Optional[str],
+        historical_memory: List[Dict[str, Any]],
+        routing_decision,
+        start_time: float,
+        streamed: bool,
+        access_groups=None,
+    ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
+        """
+        The retrieval-backed answer path shared by process_query and stream_query (AUDIT_REPORT F-27):
+        resolve -> scope gate -> retrieve -> assess -> select evidence -> generate -> verify/repair/guard
+        -> citations. Yields status events; returns the final payload. Callers decide how to deliver it,
+        so the two entry points can no longer drift apart.
+        """
+        has_attachments = bool(attachments)
+        selected_route = routing_decision.route
+
+        yield {"type": "status", "stage": "thinking", "message": "Resolving conversation context..."}
+
         resolution = query_rewriter.resolve_query(query, chat_history=chat_history)
         is_follow_up = resolution.get("is_follow_up", False)
-        resolved_query = resolution.get("resolved_query", query).strip()
-        cleaned_query = resolved_query
-        visual_requested = web_search_service.wants_visuals(query)
-        visual_context = " ".join(
-            str(item.get("content", "")) for item in (chat_history or [])[-4:]
-        )
+        cleaned_query = resolution.get("resolved_query", query).strip()
 
-        # 3. Strict SAP Domain Classifier Enforcement
-        # If user provided attachments, bypass scope rejection: query is analyzed against the uploaded documents.
+        # Strict SAP scope gate; uploaded attachments are analysed regardless of topic.
         target_check_query = cleaned_query if is_follow_up else query.strip()
         if not has_attachments:
             is_sap, refusal_msg = sap_classifier.classify(target_check_query)
             if not is_sap:
-                logger.info(f"Query rejected by SAP classifier: '{query}' -> {refusal_msg}")
+                logger.info("Query rejected by SAP classifier (route=%s)", selected_route.value)
                 return {
                     "answer": refusal_msg,
                     "source_type": "refusal",
@@ -400,13 +1147,20 @@ class RAGService:
                     "selection_summary": "Query rejected as outside SAP scope."
                 }
 
-        # 3. Retrieve from Internal Knowledge Base
-        # Retrieve independently for clear subquestions, then merge/deduplicate evidence.
-        top_kb_chunks, kb_rerank_score, aspect_results = self._retrieve_aspect_evidence(
-            db, cleaned_query, settings.TOP_K
+        if has_attachments:
+            yield {
+                "type": "status",
+                "stage": "document_analysis",
+                "message": f"Analyzing {len(attachments)} attached document(s)..."
+            }
+
+        # Internal retrieval: each clear sub-question is retrieved on its own, then merged.
+        yield {"type": "status", "stage": "retrieval", "message": "Thinking..."}
+        top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
+            db, cleaned_query, settings.TOP_K, allowed_groups=access_groups
         )
 
-        # 3. Assess Internal Evidence Confidence
+        yield {"type": "status", "stage": "assessing_evidence", "message": "Thinking..."}
         internal_confidence_data = evidence_selection_service.compute_internal_confidence(
             cleaned_query, top_kb_chunks
         )
@@ -424,55 +1178,51 @@ class RAGService:
                 f"{row['aspect'][:80]}={row['score']:.2f} ({row['evidence_count']} passages)" for row in aspect_results
             )
         internal_conf = internal_confidence_data["confidence"]
-        document_match_score = kb_rerank_score
         auto_compare_trigger = self._should_auto_compare(document_match_score, internal_confidence_data)
-        should_trigger_tavily = auto_compare_trigger or internal_confidence_data["should_trigger_tavily"]
+        web_fallback_trigger = self._should_trigger_web_fallback(document_match_score, internal_confidence_data)
+        should_trigger_tavily = auto_compare_trigger or web_fallback_trigger
 
-        # Let the multi-source comparator fetch both GitHub and web evidence when
-        # the document match is weak. The legacy web-only path remains available
-        # when automatic comparison is disabled.
+        # Legacy web-only path; the multi-source comparator fetches its own web evidence.
         web_results = []
-        if should_trigger_tavily and settings.WEB_FALLBACK_ENABLED and not auto_compare_trigger:
+        if web_fallback_trigger and not auto_compare_trigger:
+            yield {"type": "status", "stage": "web_search", "message": "Thinking..."}
             try:
                 web_results = web_search_service.search_sap_authoritative(cleaned_query)
             except Exception as e:
-                logger.warning(f"Tavily search error: {e}")
+                logger.warning(f"Web search error: {e}")
                 web_results = []
 
-        # Check Feature Flags for Repository Retrieval and Multi-Source Comparison
         repo_enabled = getattr(settings, "REPO_SOURCE_ENABLED", False)
         compare_enabled = getattr(settings, "MULTI_SOURCE_COMPARE_ENABLED", False)
 
-        # Mode B: Repository Shadow Mode (repo_enabled=True, compare_enabled=False)
+        # Repository shadow mode: audit what the repository source would have chosen, answer unchanged.
         shadow_audit = None
         if repo_enabled and not compare_enabled:
             try:
                 shadow_audit = self.comparator.run_shadow_comparison(
-                    db=db,
-                    query=cleaned_query,
-                    kb_candidates=top_kb_chunks
+                    db=db, query=cleaned_query, kb_candidates=top_kb_chunks
                 )
                 logger.info(
-                    f"[SHADOW MODE AUDIT] Query: '{cleaned_query[:40]}' | "
-                    f"Hypothetical winner: {shadow_audit.get('hypothetical_winner')} | "
-                    f"Score: {shadow_audit.get('hypothetical_score')}"
+                    "[SHADOW MODE AUDIT] Hypothetical winner: %s | Score: %s",
+                    shadow_audit.get("hypothetical_winner"), shadow_audit.get("hypothetical_score"),
                 )
             except Exception as e:
                 logger.warning(f"Shadow mode comparison execution error: {e}")
 
-        # Mode C: Multi-Source Comparison Mode (Active only when explicitly enabled)
+        yield {"type": "status", "stage": "evidence_selection", "message": "Thinking..."}
         comp_result = {}
         if compare_enabled or auto_compare_trigger:
+            yield {"type": "status", "stage": "multi_source_search", "message": "Thinking..."}
             from backend.app.retrieval.multi_source_compare import multi_source_comparator
             comp_result = multi_source_comparator.execute_multi_source_comparison(
                 db=db,
                 query=cleaned_query,
                 kb_candidates=top_kb_chunks,
-                repo_source_enabled=(repo_enabled or auto_compare_trigger),
+                repo_source_enabled=repo_enabled,
                 multi_source_compare_enabled=True,
                 web_search_available=settings.WEB_FALLBACK_ENABLED,
                 force_web_search=auto_compare_trigger,
-                query_aspects=self.split_question_aspects(cleaned_query),
+                query_aspects=self._external_search_aspects(cleaned_query, aspect_results),
             )
             winning_cand = comp_result.get("winning_candidate")
             if winning_cand:
@@ -495,7 +1245,6 @@ class RAGService:
                     "selected_evidence_quality": 0.0,
                 }
         else:
-            # 5. Legacy Unified Evidence Selection (Mode A & Mode B authoritative path)
             evidence_selection = evidence_selection_service.select_strongest_evidence(
                 query=cleaned_query,
                 internal_candidates=top_kb_chunks,
@@ -506,11 +1255,12 @@ class RAGService:
             selected_source_type = evidence_selection.get("source_type") or "knowledge_base"
             selected_quality = evidence_selection.get("selected_evidence_quality", 0.8)
 
-        selected_passages = self._ensure_aspect_coverage(selected_passages, top_kb_chunks, aspect_results)
+        selected_passages = self._ensure_aspect_coverage(
+            selected_passages, top_kb_chunks, aspect_results, interleave=is_solution_design_question(cleaned_query)
+        )
 
         if has_attachments:
-            attachment_passages = self._attachment_passages(cleaned_query, attachments)
-            selected_passages = attachment_passages + selected_passages
+            selected_passages = self._attachment_passages(cleaned_query, attachments) + selected_passages
             selected_source_type = "attached_document"
 
         # Do not discard supported subparts/calculations because another aspect is weak.
@@ -523,112 +1273,173 @@ class RAGService:
                 "this retrieval outcome does not establish that the functionality is unsupported."
             )
 
-        # 6. Generate Candidate Answer
+        # Block/restriction questions: evidence for each candidate block type.
+        scope = self._classify_scope(cleaned_query)
+        if scope:
+            selected_passages = self._ensure_scope_coverage(
+                selected_passages, self._retrieve_scope_evidence(db, scope, allowed_groups=access_groups)
+            )
+        selected_passages = self._prepare_evidence(selected_passages)
+        guidance = self._generation_guidance(scope, selected_passages)
+        # Layout only (answer type, tables, headings); routed once and reused by generation and repair.
+        answer_plan = answer_style_router.route(cleaned_query, selected_passages, raw_question=query)
+
+        # The draft is generated in full and never shown before verification (F-03).
+        yield {"type": "status", "stage": "generating", "message": "Generating response..."}
         gen_res = self._generate_grounded_answer(
-            cleaned_query, selected_passages, source_type=selected_source_type
+            cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
+            answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
+            summary=summary,
         )
+        generation = gen_res.get("generation") or GenerationResult()
+        if generation.available is False:
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            yield {"type": "status", "stage": "unavailable", "message": "A verified response could not be generated."}
+            return self._unavailable_result(
+                route=selected_route.value,
+                generation=generation,
+                retrieved=top_kb_chunks,
+                passages=selected_passages,
+                answer_plan=answer_plan,
+                elapsed_ms=elapsed_ms,
+                kb_score=document_match_score,
+            )
         candidate_answer = gen_res["answer"]
-        final_answer = candidate_answer
-        final_grounding_score = gen_res.get("grounded_score", 0.85)
-        verification_status = gen_res.get("verification_status", "verified")
-        verification = {
+        initial_score = gen_res.get("grounded_score", 0.85)
+        initial_verification = gen_res.get("verification") or {
+            "grounding_score": initial_score,
+            "verification_status": gen_res.get("verification_status", "verified"),
             "passes_grounding_gate": gen_res.get(
-                "passes_grounding_gate", final_grounding_score >= settings.ANSWER_GROUNDING_THRESHOLD
+                "passes_grounding_gate", initial_score >= settings.ANSWER_GROUNDING_THRESHOLD
             ),
             "unsupported_claims": gen_res.get("unsupported_claims", []),
             "critical_unsupported_claims": gen_res.get("critical_unsupported_claims", []),
         }
 
-        # 8. Controlled Answer Repair if needed
-        regeneration_count = 0
-        if not verification.get("passes_grounding_gate") and settings.MAX_GROUNDING_REPAIR_ATTEMPTS > 0:
-            logger.info("Attempting answer repair...")
-            regeneration_count += 1
-            repaired_answer = llm_service.repair_answer(
-                query=cleaned_query,
-                candidate_answer=candidate_answer,
-                unsupported_claims=verification.get("unsupported_claims", []),
-                critical_unsupported_ids=verification.get("critical_unsupported_claims", []),
-                evidence=selected_passages,
-                source_type=selected_source_type
-            )
-            if repaired_answer and len(repaired_answer.strip()) > 30:
-                final_answer = repaired_answer
-                re_ver = grounding_service.verify_answer(
-                    cleaned_query, repaired_answer, selected_passages, source_type=selected_source_type
-                )
-                final_grounding_score = re_ver.get("grounding_score", final_grounding_score)
-                verification_status = re_ver.get("verification_status", "partial")
-                verification["passes_grounding_gate"] = re_ver.get("passes_grounding_gate", False)
-
-        # 10. Generate Exactly 3 Recommended Follow-up Questions
-        follow_ups = followup_service.generate_followup_questions(
-            cleaned_query, final_answer, selected_passages
+        # Claim verification, one controlled repair, deterministic guard, revalidation.
+        yield {"type": "status", "stage": "verifying_claims", "message": "Finalizing response..."}
+        final_answer, final_verification, repair_info, verification_status = self._finalize_answer(
+            cleaned_query, candidate_answer, selected_passages, selected_source_type, scope, guidance,
+            verification=initial_verification, answer_plan=answer_plan,
         )
+        if not final_verification.get("passes_grounding_gate", False):
+            retry_web = (
+                not should_trigger_tavily
+                and settings.AUTO_MULTI_SOURCE_FALLBACK
+                and settings.WEB_FALLBACK_ENABLED
+            )
+            web_retry_results = []
+            if retry_web:
+                yield {"type": "status", "stage": "web_search", "message": "Checking approved SAP web sources..."}
+                try:
+                    web_retry_results = web_search_service.search_sap_authoritative(cleaned_query)
+                except Exception as exc:
+                    logger.warning("Grounding-triggered web fallback failed (%s)", type(exc).__name__)
 
-        # Build Citations and Web Sources with exact metadata
-        citations = []
-        web_sources = []
-        for p in selected_passages:
-            src_type = p.get("source_type") or ("web" if p.get("url") else "knowledge_base")
-            if src_type == "attached_document":
-                citations.append({
-                    "source_type": "attached_document",
-                    "chunk_id": "att-doc",
-                    "document": p.get("document_name") or p.get("document") or "Attached Document",
-                    "page": 1,
-                    "section": p.get("section") or "Attached Document Content",
-                    "score": 1.0,
-                    "snippet": (p.get("snippet") or p.get("chunk_text") or "")[:350],
-                })
-            elif src_type == "knowledge_base":
-                citations.append(self._format_kb_citation(p))
-            elif src_type == "github_repo":
-                repo_name = p.get("document_name") or f"github:{p.get('repo_name', 'repository')}"
-                sec = p.get("section") or p.get("file_path") or "Repository Source"
-                score_val = round(float(p.get("final_score", p.get("calibrated_relevance_score", p.get("score", 0.7)))), 4)
-                raw_snip = p.get("snippet") or p.get("chunk_text") or ""
-                clean_snip = raw_snip.replace("\ufffd", "-").strip()
-                citations.append({
-                    "source_type": "github_repo",
-                    "chunk_id": str(p.get("candidate_id") or p.get("chunk_id") or ""),
-                    "document": repo_name,
-                    "page": 1,
-                    "section": sec,
-                    "score": score_val,
-                    "snippet": clean_snip
-                })
-            elif src_type == "web":
-                title_val = p.get("title") or p.get("document_name") or "SAP Official Documentation"
-                url_val = p.get("url", "")
-                domain_val = p.get("domain", "help.sap.com")
-                raw_snip = p.get("snippet") or p.get("chunk_text") or ""
-                clean_snip = raw_snip.replace("\ufffd", "-").strip()
-                web_sources.append({
-                    "title": title_val,
-                    "url": url_val,
-                    "domain": domain_val,
-                    "snippet": clean_snip
-                })
+            if web_retry_results:
+                retry_passages = self._prepare_evidence(list(top_kb_chunks) + list(web_retry_results))
+                retry_source_type = "combined" if top_kb_chunks else "web"
+                retry_guidance = self._generation_guidance(scope, retry_passages)
+                retry_plan = answer_style_router.route(cleaned_query, retry_passages, raw_question=query)
+                yield {"type": "status", "stage": "generating", "message": "Preparing an answer from retrieved and web evidence..."}
+                retry_result = self._generate_grounded_answer(
+                    cleaned_query, retry_passages, source_type=retry_source_type, guidance=retry_guidance,
+                    answer_plan=retry_plan, chat_history=chat_history,
+                    historical_memory=historical_memory, summary=summary,
+                )
+                retry_generation = retry_result.get("generation") or GenerationResult()
+                if retry_generation.available is not False:
+                    retry_candidate = retry_result["answer"]
+                    retry_verification = retry_result.get("verification") or {
+                        "grounding_score": retry_result.get("grounded_score"),
+                        "verification_status": retry_result.get("verification_status", "verified"),
+                        "passes_grounding_gate": retry_result.get("passes_grounding_gate", False),
+                        "unsupported_claims": retry_result.get("unsupported_claims", []),
+                        "critical_unsupported_claims": retry_result.get("critical_unsupported_claims", []),
+                    }
+                    yield {"type": "status", "stage": "verifying_claims", "message": "Verifying the web-backed response..."}
+                    retry_final, retry_final_verification, retry_repair, retry_status = self._finalize_answer(
+                        cleaned_query, retry_candidate, retry_passages, retry_source_type, scope, retry_guidance,
+                        verification=retry_verification, answer_plan=retry_plan,
+                    )
+                    if retry_final_verification.get("passes_grounding_gate", False):
+                        candidate_answer = retry_candidate
+                        final_answer = retry_final
+                        final_verification = retry_final_verification
+                        repair_info = retry_repair
+                        verification_status = retry_status
+                        generation = retry_generation
+                        selected_passages = retry_passages
+                        selected_source_type = retry_source_type
+                        selected_quality = float(retry_final_verification.get("grounding_score") or 0.0)
+                        answer_plan = retry_plan
+                        should_trigger_tavily = True
+                        evidence_selection["selection_summary"] = "Internal answer failed grounding; retried against approved SAP web evidence."
+                    else:
+                        retry_generation.failure_category = "verification_rejected_after_web_search"
+                        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                        return self._unavailable_result(
+                            route=selected_route.value, generation=retry_generation,
+                            retrieved=top_kb_chunks + web_retry_results, passages=retry_passages,
+                            answer_plan=retry_plan, elapsed_ms=elapsed_ms, kb_score=document_match_score,
+                        )
+                else:
+                    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                    return self._unavailable_result(
+                        route=selected_route.value, generation=retry_generation,
+                        retrieved=top_kb_chunks + web_retry_results, passages=retry_passages,
+                        answer_plan=retry_plan, elapsed_ms=elapsed_ms, kb_score=document_match_score,
+                    )
+            else:
+                elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                return self._unavailable_result(
+                    route=selected_route.value, generation=generation, retrieved=top_kb_chunks,
+                    passages=selected_passages, answer_plan=answer_plan, elapsed_ms=elapsed_ms,
+                    kb_score=document_match_score,
+                )
+        final_grounding_score = final_verification.get("grounding_score", initial_score)
+        validation_audit = self._validation_audit(
+            cleaned_query, document_match_score, selected_passages, final_verification, aspect_results, scope, repair_info
+        )
+        self._attach_answer_style(validation_audit, answer_plan)
 
-        citations = self._dedupe_citations(citations)
-
-        # Visual retrieval is deliberately independent from textual evidence selection and
-        # grounding: an image can illustrate an answer but never proves a technical claim.
-        images = []
-        if visual_requested:
-            try:
-                images = web_search_service.search_sap_images(cleaned_query, visual_context)
-            except Exception as exc:
-                logger.warning("Tavily image retrieval failed without affecting answer delivery: %s", exc)
-
+        follow_ups = followup_service.generate_followup_questions(
+            cleaned_query, strip_markers(final_answer), selected_passages
+        )
+        citations, web_sources = self._build_citations(selected_passages)
         comparison_summary = self._comparison_summary(comp_result) if comp_result else {
             "source_scores": {"knowledge_base": round(float(document_match_score), 4)},
             "comparison_audit": None,
         }
 
+        # Visual retrieval only when the user explicitly asks for diagrams/illustrations.
+        relevant_images = []
+        if web_search_service.wants_visuals(cleaned_query):
+            try:
+                relevant_images = web_search_service.search_sap_images(cleaned_query)
+            except Exception as e:
+                logger.warning(f"Visual search failed: {e}")
+
+        # Mixed emotional + technical question: brief acknowledgment before the verified answer.
+        if selected_route == QueryRoute.MIXED_QUERY and routing_decision.emotional_part:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            if not final_answer.startswith(ack):
+                final_answer = f"{ack}\n\n{final_answer}"
+
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.info(
+            f"[QueryRouter Execution] Route: {selected_route.value} | Retrieval Executed: True | "
+            f"Duration: {elapsed_ms}ms | Streamed: {streamed}"
+        )
+        diagnostics = self._generation_diagnostics(
+            generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
+            repair_info, answer_plan, elapsed_ms,
+        )
+        logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
+
         return {
             "answer": final_answer,
+            "route": selected_route.value,
             "source_type": selected_source_type,
             "grounding_score": final_grounding_score,
             "grounded_score": final_grounding_score,
@@ -641,322 +1452,29 @@ class RAGService:
             "verification_status": verification_status,
             "internal_evidence_confidence": internal_conf,
             "selected_evidence_quality": selected_quality,
-            "external_search_used": should_trigger_tavily or bool(images),
+            "external_search_used": should_trigger_tavily,
             "citations": citations,
             "web_sources": web_sources,
-            "images": images,
+            "images": relevant_images,
             "follow_up_questions": follow_ups,
             "selection_summary": evidence_selection.get("selection_summary", ""),
-            "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
-            "provider_used": getattr(llm_service, "last_provider_used", "groq"),
-            "failed_over": getattr(llm_service, "failed_over", False),
-            "regeneration_count": regeneration_count,
+            "model_used": generation.model,
+            "provider_used": generation.provider,
+            "failed_over": generation.failed_over,
+            "regeneration_count": 1 if repair_info["attempted"] else 0,
             "shadow_audit": shadow_audit,
-            "comparison_audit": comparison_summary["comparison_audit"]
+            "comparison_audit": comparison_summary["comparison_audit"],
+            # Admin/audit only: stripped for ordinary users by the API layer.
+            "answer_decision": validation_audit.get("decision"),
+            "validation_audit": validation_audit,
+            "diagnostics": diagnostics,
         }
 
-    def stream_query(
-        self,
-        db: Session,
-        query: str,
-        chat_history: Optional[List[Dict[str, Any]]] = None,
-        user: Optional[Any] = None,
-        attachments: Optional[List[Dict[str, Any]]] = None,
-    ) -> Generator[Dict[str, Any], None, None]:
-        """
-        Progressive Streaming Pipeline for SAP BRIM Knowledge Assistant with Security Enforcement.
-        Emits realistic status events during retrieval, evidence evaluation, planning,
-        and claim verification.
-        Buffers candidate answer tokens to guarantee that unverified text is NOT displayed
-        before passing the 80% grounding gate.
-        Then streams the verified text smoothly to the user.
-        """
-        # 0. Resolve user identity and role
-        user_role = getattr(user, "role", "consultant") if user else "consultant"
-        user_id = getattr(user, "id", None) if user else None
-        user_email = getattr(user, "email", None) if user else None
-        has_attachments = bool(attachments)
-
-        # STAGE 0: Conversational & Sentimental Inquiries (Dedicated Key)
-        if not has_attachments and sap_classifier.is_conversational_or_greeting(query):
-            logger.info(f"Stream routing conversational query '{query}' to dedicated conversational LLM tier.")
-            yield {
-                "type": "status",
-                "stage": "thinking",
-                "message": "Connecting to SAP BRIM Assistant..."
-            }
-            token_buffer = ""
-            for token in llm_service.stream_conversational_reply(query, chat_history=chat_history):
-                token_buffer += token
-                yield {
-                    "type": "token",
-                    "content": token
-                }
-
-            follow_ups = followup_service.generate_starter_followups()
-            yield {
-                "type": "done",
-                "answer": token_buffer,
-                "source_type": "conversational",
-                "grounding_score": 1.0,
-                "is_in_rag_pipeline": False,
-                "kb_score": 0.0,
-                "web_score": 0.0,
-                "winning_score": 0.0,
-                "selected_source": "conversational_assistant",
-                "verification_status": "verified",
-                "internal_evidence_confidence": 0.0,
-                "selected_evidence_quality": 0.0,
-                "external_search_used": False,
-                "citations": [],
-                "web_sources": [],
-                "follow_up_questions": follow_ups,
-                "selection_summary": "Handled via dedicated conversational assistant introducing SAP BRIM."
-            }
-            return
-
-        # STAGE 1: Context Resolution & Follow-Up Check
-        yield {
-            "type": "status",
-            "stage": "thinking",
-            "message": "Resolving conversation context..."
-        }
-
-        resolution = query_rewriter.resolve_query(query, chat_history=chat_history)
-        is_follow_up = resolution.get("is_follow_up", False)
-        resolved_query = resolution.get("resolved_query", query).strip()
-        cleaned_query = resolved_query
-        visual_requested = web_search_service.wants_visuals(query)
-        visual_context = " ".join(
-            str(item.get("content", "")) for item in (chat_history or [])[-4:]
-        )
-
-        # Scope Verification via SAPClassifier
-        # If user uploaded attachments, bypass refusal gate: user is querying their uploaded documents
-        target_check_query = cleaned_query if is_follow_up else query.strip()
-        if not has_attachments:
-            is_sap, refusal_msg = sap_classifier.classify(target_check_query)
-            if not is_sap:
-                logger.info(f"Stream query rejected by SAP classifier: '{query}' -> {refusal_msg}")
-                yield {
-                    "type": "token",
-                    "content": refusal_msg
-                }
-                yield {
-                    "type": "done",
-                    "answer": refusal_msg,
-                    "source_type": "refusal",
-                    "grounding_score": 0.0,
-                    "is_in_rag_pipeline": False,
-                    "kb_score": 0.0,
-                    "web_score": 0.0,
-                    "winning_score": 0.0,
-                    "selected_source": "refusal",
-                    "verification_status": "rejected",
-                    "internal_evidence_confidence": 0.0,
-                    "selected_evidence_quality": 0.0,
-                    "external_search_used": False,
-                    "citations": [],
-                    "web_sources": [],
-                    "follow_up_questions": [],
-                    "selection_summary": "Query rejected as outside SAP scope."
-                }
-                return
-
-        if has_attachments:
-            yield {
-                "type": "status",
-                "stage": "document_analysis",
-                "message": f"Analyzing {len(attachments)} attached document(s)..."
-            }
-
-        # STAGE 2: Internal Retrieval
-        yield {
-            "type": "status",
-            "stage": "retrieval",
-            "message": "Thinking..."
-        }
-
-        top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
-            db, cleaned_query, settings.TOP_K, hybrid=True
-        )
-
-        # STAGE 3: Assess Internal Evidence Confidence
-        yield {
-            "type": "status",
-            "stage": "assessing_evidence",
-            "message": "Thinking..."
-        }
-
-        internal_confidence_data = evidence_selection_service.compute_internal_confidence(
-            cleaned_query, top_kb_chunks
-        )
-        if len(aspect_results) > 1:
-            internal_confidence_data["aspects"] = aspect_results
-            internal_confidence_data["confidence"] = min(
-                float(internal_confidence_data["confidence"]),
-                min((row["score"] for row in aspect_results), default=0.0),
-            )
-            internal_confidence_data["should_trigger_tavily"] = any(
-                row["score"] < settings.INTERNAL_EVIDENCE_THRESHOLD or row["evidence_count"] == 0
-                for row in aspect_results
-            ) or internal_confidence_data["should_trigger_tavily"]
-            internal_confidence_data["reason"] = "Per-part evidence assessment: " + "; ".join(
-                f"{row['aspect'][:80]}={row['score']:.2f} ({row['evidence_count']} passages)" for row in aspect_results
-            )
-        internal_conf = internal_confidence_data["confidence"]
-        auto_compare_trigger = self._should_auto_compare(document_match_score, internal_confidence_data)
-        should_trigger_tavily = auto_compare_trigger or internal_confidence_data["should_trigger_tavily"]
-
-        web_results = []
-        if should_trigger_tavily and settings.WEB_FALLBACK_ENABLED and not auto_compare_trigger:
-            # Emit progress event ONLY if Tavily was triggered
-            yield {
-                "type": "status",
-                "stage": "web_search",
-                "message": "Thinking..."
-            }
-            try:
-                web_results = web_search_service.search_sap_authoritative(cleaned_query)
-            except Exception as e:
-                logger.warning(f"Web search error: {e}")
-                web_results = []
-
-        # STAGE 4: Unified Evidence Selection
-        yield {
-            "type": "status",
-            "stage": "evidence_selection",
-            "message": "Thinking..."
-        }
-
-        comp_result = {}
-        compare_enabled = getattr(settings, "MULTI_SOURCE_COMPARE_ENABLED", False)
-        repo_enabled = getattr(settings, "REPO_SOURCE_ENABLED", False)
-        if auto_compare_trigger or compare_enabled:
-            yield {
-                "type": "status",
-                "stage": "multi_source_search",
-                "message": "Thinking..."
-            }
-            from backend.app.retrieval.multi_source_compare import multi_source_comparator
-            comp_result = multi_source_comparator.execute_multi_source_comparison(
-                db=db,
-                query=cleaned_query,
-                kb_candidates=top_kb_chunks,
-                repo_source_enabled=(repo_enabled or auto_compare_trigger),
-                multi_source_compare_enabled=True,
-                web_search_available=settings.WEB_FALLBACK_ENABLED,
-                force_web_search=auto_compare_trigger,
-                query_aspects=self.split_question_aspects(cleaned_query),
-            )
-            winning = comp_result.get("winning_candidate")
-            eligible = comp_result.get("eligible_candidates", [])
-            if winning:
-                selected_passages = [winning] + [
-                    c for c in eligible if c["candidate_id"] != winning["candidate_id"]
-                ][:3]
-                selected_source_type = winning["source_type"]
-                selected_quality = winning["final_score"]
-            else:
-                selected_passages = []
-                selected_source_type = "insufficient"
-                selected_quality = 0.0
-            evidence_selection = {
-                "selection_summary": comp_result.get("comparison", {}).get("selection_reason", ""),
-                "selected_evidence_quality": selected_quality,
-            }
-        else:
-            evidence_selection = evidence_selection_service.select_strongest_evidence(
-                query=cleaned_query,
-                internal_candidates=top_kb_chunks,
-                external_candidates=web_results,
-                internal_confidence_data=internal_confidence_data
-            )
-
-            selected_passages = evidence_selection.get("selected_passages") or top_kb_chunks or web_results or []
-            selected_source_type = evidence_selection.get("source_type") or "knowledge_base"
-            selected_quality = evidence_selection.get("selected_evidence_quality", 0.8)
-
-        selected_passages = self._ensure_aspect_coverage(selected_passages, top_kb_chunks, aspect_results)
-
-        if has_attachments:
-            attachment_passages = self._attachment_passages(cleaned_query, attachments)
-            selected_passages = attachment_passages + selected_passages
-            selected_source_type = "attached_document"
-
-        if selected_source_type in ("insufficient", "none"):
-            selected_passages = top_kb_chunks or web_results
-            selected_source_type = selected_passages[0].get("source_type", "knowledge_base") if selected_passages else "insufficient"
-            selected_quality = 0.0
-            evidence_selection["selection_summary"] = (
-                "No candidate met the source eligibility threshold. Answering only independently supportable parts; "
-                "this retrieval outcome does not establish that the functionality is unsupported."
-            )
-
-        # STAGE 5: Direct Live Answer Streaming (Instant TTFT)
-        yield {
-            "type": "status",
-            "stage": "generating",
-            "message": "Generating response..."
-        }
-
-        # Stream answer tokens live from LLM directly to client as they are generated
-        token_buffer = []
-        for token in llm_service.stream_answer(
-            cleaned_query, selected_passages, source_type=selected_source_type
-        ):
-            token_buffer.append(token)
-            yield {"type": "token", "content": token}
-
-        final_answer = "".join(token_buffer).strip()
-        if not final_answer:
-            # Resilient fallback if stream yielded no tokens
-            final_answer = llm_service.generate_answer(
-                cleaned_query, selected_passages, source_type=selected_source_type
-            )
-            if final_answer:
-                yield {"type": "token", "content": final_answer}
-
-        # STAGE 6: Instant Claim-Level Grounding Verification
-        yield {
-            "type": "status",
-            "stage": "verifying_claims",
-            "message": "Finalizing response..."
-        }
-        verification = grounding_service.verify_answer(
-            cleaned_query, final_answer, selected_passages, source_type=selected_source_type
-        )
-        final_grounding_score = verification.get("grounding_score", 0.85)
-        verification_status = verification.get("verification_status", "verified")
-
-        # Repair before publishing when claim verification identifies unsupported details.
-        if not verification.get("passes_grounding_gate") and settings.MAX_GROUNDING_REPAIR_ATTEMPTS > 0:
-            repaired = llm_service.repair_answer(
-                query=cleaned_query,
-                candidate_answer=final_answer,
-                unsupported_claims=verification.get("unsupported_claims", []),
-                critical_unsupported_ids=verification.get("critical_unsupported_claims", []),
-                evidence=selected_passages,
-                source_type=selected_source_type,
-            )
-            if repaired and repaired != final_answer:
-                repaired_verification = grounding_service.verify_answer(
-                    cleaned_query, repaired, selected_passages, source_type=selected_source_type
-                )
-                final_answer = repaired
-                verification = repaired_verification
-                final_grounding_score = repaired_verification.get("grounding_score", final_grounding_score)
-                verification_status = repaired_verification.get("verification_status", "partial")
-
-        # STAGE 7: Recommend Exactly 3 Follow-Up Questions (instant, <1ms)
-        follow_ups = followup_service.generate_followup_questions(
-            cleaned_query, final_answer, selected_passages
-        )
-
-        # Build Citations & Web Sources
-        citations = []
-        web_sources = []
-        for p in selected_passages:
+    def _build_citations(self, passages: List[Dict[str, Any]]):
+        """Citations (documents, attachments, repositories) and web sources for the selected evidence."""
+        citations: List[Dict[str, Any]] = []
+        web_sources: List[Dict[str, Any]] = []
+        for p in passages:
             src_type = p.get("source_type") or ("web" if p.get("url") else "knowledge_base")
             if src_type == "attached_document":
                 citations.append({
@@ -967,74 +1485,446 @@ class RAGService:
                     "section": p.get("section") or "Attached Document Content",
                     "score": 1.0,
                     "snippet": (p.get("snippet") or p.get("chunk_text") or "")[:350],
+                    "ref": p.get("evidence_id"),
                 })
             elif src_type == "knowledge_base":
-                citations.append(self._format_kb_citation(p))
+                citations.append({**self._format_kb_citation(p), "ref": p.get("evidence_id")})
             elif src_type == "github_repo":
                 citations.append({
                     "source_type": "github_repo",
                     "chunk_id": str(p.get("candidate_id") or p.get("chunk_id") or ""),
-                    "document": p.get("document_name") or p.get("repo_url") or "GitHub SAP source",
+                    "document": p.get("document_name") or f"github:{p.get('repo_name', 'repository')}",
                     "page": 1,
-                    "section": p.get("file_path") or p.get("section", "Repository source"),
-                    "score": round(float(p.get("final_score", p.get("calibrated_relevance_score", 0.0))), 4),
-                    "snippet": (p.get("snippet") or p.get("chunk_text") or "").replace("\ufffd", "-").strip(),
+                    "section": p.get("section") or p.get("file_path") or "Repository Source",
+                    "score": round(float(p.get("final_score", p.get("calibrated_relevance_score", p.get("score", 0.7)))), 4),
+                    "snippet": (p.get("snippet") or p.get("chunk_text") or "").replace("�", "-").strip(),
+                    "ref": p.get("evidence_id"),
                 })
             elif src_type == "web":
-                title_val = p.get("title") or p.get("document_name") or "SAP Official Documentation"
-                url_val = p.get("url", "")
-                domain_val = p.get("domain", "help.sap.com")
-                raw_snip = p.get("snippet") or p.get("chunk_text") or ""
-                clean_snip = raw_snip.replace("\ufffd", "-").strip()
                 web_sources.append({
-                    "title": title_val,
-                    "url": url_val,
-                    "domain": domain_val,
-                    "snippet": clean_snip
+                    "title": p.get("title") or p.get("document_name") or "SAP Official Documentation",
+                    "url": p.get("url", ""),
+                    "domain": p.get("domain", "help.sap.com"),
+                    "snippet": (p.get("snippet") or p.get("chunk_text") or "").replace("�", "-").strip(),
+                    "ref": p.get("evidence_id"),
                 })
+        return self._dedupe_citations(citations), web_sources
 
-        citations = self._dedupe_citations(citations)
+    def stream_query(
+        self,
+        db: Session,
+        query: str,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        user: Optional[Any] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        chat_id: Optional[str] = None,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """
+        Progressive Streaming Pipeline for SAP BRIM Knowledge Assistant with Security Enforcement.
+        Emits realistic status events during retrieval, evidence evaluation, planning,
+        and claim verification.
+        Buffers candidate answer tokens to guarantee that unverified text is NOT displayed
+        before passing the 80% grounding gate.
+        Then streams the verified text smoothly to the user.
+        """
+        start_time = time.perf_counter()
+        # 0. Resolve user identity and role
+        user_id = getattr(user, "id", None) if user else None
+        # Document-level access control: only documents sharing the caller's groups are retrieved (F-01).
+        access_groups = retrieval_groups(user)
+        has_attachments = bool(attachments)
 
-        images = []
-        if visual_requested:
+        # Strict 20-message conversation context window
+        if chat_id and chat_history is None:
+            chat_history = conversation_memory_service.get_recent_messages(db, chat_id, limit=20)
+        elif chat_history:
+            chat_history = chat_history[-20:]
+
+        summary = conversation_memory_service.get_chat_summary(db, chat_id) if chat_id else None
+        historical_memory: List[Dict[str, Any]] = []
+
+        # Check for conversation memory intent (exact first question, history recall, cross-conversation)
+        memory_intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
+
+        if memory_intent == MemoryIntent.FIRST_MESSAGE_LOOKUP:
+            first_msg = conversation_memory_service.get_first_user_message(db, chat_id) if chat_id else None
+            if first_msg:
+                first_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", first_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = first_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(first_msg["created_at"], datetime) else str(first_msg["created_at"])
+                ans_text = (
+                    f"Your first question in this chat was:\n\n"
+                    f"> \"{first_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{first_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no previous questions recorded in this conversation."
+
             yield {
                 "type": "status",
-                "stage": "image_search",
-                "message": "Finding relevant SAP technical visuals..."
+                "stage": "thinking",
+                "message": "Retrieving from conversation memory..."
             }
-            try:
-                images = web_search_service.search_sap_images(cleaned_query, visual_context)
-            except Exception as exc:
-                logger.warning("Tavily image retrieval failed without affecting answer delivery: %s", exc)
+            words = ans_text.split(" ")
+            for i, w in enumerate(words):
+                yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
 
-        comparison_summary = self._comparison_summary(comp_result) if comp_result else {
-            "source_scores": {"knowledge_base": round(float(document_match_score), 4)},
-            "comparison_audit": None,
-        }
+            follow_ups = followup_service.generate_starter_followups()
+            yield {
+                "type": "done",
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved first user question from conversation history."
+            }
+            return
 
-        # STAGE 10: Completion 'done' event with all required fields
-        yield {
-            "type": "done",
-            "answer": final_answer,
-            "source_type": selected_source_type,
-            "grounding_score": final_grounding_score,
-            "is_in_rag_pipeline": internal_conf >= settings.INTERNAL_EVIDENCE_THRESHOLD,
-            "kb_score": round(document_match_score, 4),
-            "web_score": round(max((c["calibrated_relevance_score"] for c in comp_result.get("all_candidates", []) if c["source_type"] == "web"), default=0.0), 4) if comp_result else round(selected_quality, 4) if should_trigger_tavily else 0.0,
-            "winning_score": round(selected_quality, 4),
-            "source_scores": comparison_summary["source_scores"],
-            "selected_source": selected_source_type,
-            "verification_status": verification_status,
-            "internal_evidence_confidence": internal_conf,
-            "selected_evidence_quality": selected_quality,
-            "external_search_used": should_trigger_tavily or bool(images),
-            "citations": citations,
-            "web_sources": web_sources,
-            "images": images,
-            "follow_up_questions": follow_ups,
-            "selection_summary": evidence_selection.get("selection_summary", ""),
-            "comparison_audit": comparison_summary["comparison_audit"]
-        }
+        if memory_intent == MemoryIntent.LAST_MESSAGE_LOOKUP:
+            last_msg = conversation_memory_service.get_last_user_message(db, chat_id) if chat_id else None
+            if last_msg:
+                last_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", last_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = last_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(last_msg["created_at"], datetime) else str(last_msg["created_at"])
+                ans_text = (
+                    f"Your last question prior to this was:\n\n"
+                    f"> \"{last_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{last_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no prior messages found in this conversation."
+
+            yield {
+                "type": "status",
+                "stage": "thinking",
+                "message": "Retrieving from conversation memory..."
+            }
+            words = ans_text.split(" ")
+            for i, w in enumerate(words):
+                yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+
+            follow_ups = followup_service.generate_starter_followups()
+            yield {
+                "type": "done",
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved last message directly from conversation history."
+            }
+            return
+
+        if memory_intent == MemoryIntent.CROSS_CONVERSATION_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=True, top_k=5
+            )
+            if not hist_msgs:
+                ans_text = "I searched your other conversations, but could not find any earlier discussion matching your query."
+                yield {"type": "status", "stage": "thinking", "message": "Searching conversation history..."}
+                words = ans_text.split(" ")
+                for i, w in enumerate(words):
+                    yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+                yield {
+                    "type": "done",
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": None,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "unverified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched other conversations; no matching records found."
+                }
+                return
+
+            yield {"type": "status", "stage": "thinking", "message": "Recalling from other conversations..."}
+            token_buffer = ""
+            generation = GenerationResult()
+            for token in llm_service.stream_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
+            ):
+                token_buffer += token
+                yield {"type": "token", "content": token}
+
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "unavailable" if generation.available is False else "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "unavailable" if generation.available is False else "conversation_memory",
+                "verification_status": "unavailable" if generation.available is False else "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from cross-conversation memory."
+            }
+            return
+
+        if memory_intent == MemoryIntent.HISTORY_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+            if not hist_msgs and not chat_history:
+                ans_text = "I reviewed our conversation history, but could not find any previous mention of that in our messages."
+                yield {"type": "status", "stage": "thinking", "message": "Searching conversation history..."}
+                words = ans_text.split(" ")
+                for i, w in enumerate(words):
+                    yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+                yield {
+                    "type": "done",
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": None,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "unverified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched conversation history; no matching records found."
+                }
+                return
+
+            yield {"type": "status", "stage": "thinking", "message": "Recalling from conversation history..."}
+            token_buffer = ""
+            generation = GenerationResult()
+            for token in llm_service.stream_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
+            ):
+                token_buffer += token
+                yield {"type": "token", "content": token}
+
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "unavailable" if generation.available is False else "conversation_memory",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "unavailable" if generation.available is False else "conversation_memory",
+                "verification_status": "unavailable" if generation.available is False else "unverified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from historical conversation memory."
+            }
+            return
+
+        if memory_intent == MemoryIntent.MIXED:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            historical_memory = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+
+        # STAGE 0: Intelligent Query Routing Execution
+        routing_decision = query_router.route(query, chat_history=chat_history)
+        selected_route = routing_decision.route
+        logger.info(
+            f"[QueryRouter] Query: '{query[:60]}' | Route: {selected_route.value} | "
+            f"Requires Retrieval: {routing_decision.requires_retrieval} | Streamed: True"
+        )
+
+        # Path A: Sentimental and Casual Questions -> Direct LLM Stream (Bypass RAG completely)
+        if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
+            logger.info("RAG stream route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            yield {
+                "type": "status",
+                "stage": "generating",
+                "message": "Generating response..."
+            }
+            token_buffer = ""
+            for token in llm_service.stream_emotional_casual_reply(query, chat_history=chat_history):
+                token_buffer += token
+                yield {
+                    "type": "token",
+                    "content": token
+                }
+
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: EMOTIONAL_CASUAL | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: True"
+            )
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "conversational",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "conversational",
+                "route": selected_route.value,
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM without retrieval (emotional/casual query)."
+            }
+            return
+
+        # Path B: Simple Conceptual SAP Questions -> Direct LLM Stream (Bypass RAG completely)
+        if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.SIMPLE_SAP:
+            logger.info("RAG stream route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            yield {
+                "type": "status",
+                "stage": "generating",
+                "message": "Generating response..."
+            }
+            token_buffer = ""
+            for token in llm_service.stream_simple_sap_reply(query, chat_history=chat_history):
+                token_buffer += token
+                yield {
+                    "type": "token",
+                    "content": token
+                }
+
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: SIMPLE_SAP | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: True"
+            )
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "direct_llm",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM without retrieval (simple conceptual SAP question)."
+            }
+            return
+
+        # Mixed Queries with Simple SAP Technical Part -> Direct LLM Stream with brief acknowledgment
+        if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            tech_q = routing_decision.technical_part or query
+            logger.info("RAG stream route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            yield {
+                "type": "status",
+                "stage": "generating",
+                "message": "Generating response..."
+            }
+            token_buffer = ack + " "
+            yield {
+                "type": "token",
+                "content": ack + " "
+            }
+            for token in llm_service.stream_simple_sap_reply(tech_q, chat_history=chat_history):
+                token_buffer += token
+                yield {
+                    "type": "token",
+                    "content": token
+                }
+
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: MIXED_QUERY (Simple) | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: True"
+            )
+            yield {
+                "type": "done",
+                "answer": token_buffer.strip(),
+                "source_type": "direct_llm",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM with emotional acknowledgment and simple SAP answer."
+            }
+            return
+
+        # Retrieval-backed answer: one implementation shared with process_query (F-27).
+        result = yield from self._answer_pipeline(
+            db, query, chat_history=chat_history, attachments=attachments, summary=summary,
+            historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
+            access_groups=access_groups,
+            streamed=True,
+        )
+        # Only verified text reaches the client: verification, repair and guard already ran (F-03).
+        yield from self._verified_token_events(result["answer"])
+        yield {"type": "done", **result}
 
 
 rag_service = RAGService()

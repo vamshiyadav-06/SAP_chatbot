@@ -1,12 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { User, Copy, Check, Eye, RotateCcw, Sparkles, ArrowRight, Image as ImageIcon, ExternalLink, FileText } from 'lucide-react';
-import type { Message } from '../../types';
+import {
+  User, Copy, Check, Eye, RotateCcw, Sparkles, ArrowRight, FileText, Share, Pencil,
+  ThumbsUp, ThumbsDown, Volume2, Square, RefreshCw,
+} from 'lucide-react';
+import type { Message, MessageFeedback } from '../../types';
 import { GroundingScoreBadge } from './GroundingScoreBadge';
 import { SourceTypeBadge } from './SourceTypeBadge';
 import { CitationModal } from './CitationModal';
+import { SharePromptModal } from './SharePromptModal';
+import { isStoredMessage, toSpeechText } from './messageUtils';
 import { useAuth } from '../../context/AuthContext';
+import { apiSetFeedback } from '../../services/api';
 import iconOnly from '../../assets/clyptusap-icon.png';
 
 interface ChatMessageProps {
@@ -15,7 +21,33 @@ interface ChatMessageProps {
   streamingStage?: string | null;
   onRetry?: () => void;
   onSelectFollowUp?: (question: string) => void;
+  /** Present only for prompts that can be rewritten; called with the new prompt text. */
+  onEdit?: (newText: string) => void;
+  /** True while an answer is streaming, so a second request cannot start. */
+  editDisabled?: boolean;
+  /** Present only on the latest answer; asks the same question again for a new answer. */
+  onRegenerate?: () => void;
 }
+
+const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+// Chrome stops speaking long utterances after ~15s, so text is queued in sentence-sized pieces.
+const speechChunks = (text: string, max = 200): string[] => {
+  const chunks: string[] = [];
+  let current = '';
+  for (const sentence of text.match(/[^.!?]+[.!?]*\s*/g) ?? [text]) {
+    if (current && (current + sentence).length > max) {
+      chunks.push(current.trim());
+      current = '';
+    }
+    current += sentence;
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+};
+
+const promptActionClass =
+  'p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-500 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent';
 
 const parseUserMessageContent = (content: string) => {
   const match = content.match(/^\[Attached:\s*(.+?)\]\n\n([\s\S]*)$/);
@@ -39,10 +71,19 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   streamingStage = null,
   onRetry,
   onSelectFollowUp,
+  onEdit,
+  editDisabled = false,
+  onRegenerate,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [feedback, setFeedback] = useState<MessageFeedback | null>(message.feedback ?? null);
+  const [speaking, setSpeaking] = useState(false);
+  // Identifies this message's speech so a newer utterance elsewhere does not reset our state early.
+  const speechRunRef = useRef(0);
+  const [showShare, setShowShare] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState('');
   const [showSourcesModal, setShowSourcesModal] = useState(false);
-  const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_admin);
 
@@ -61,13 +102,69 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   const hasWebSources = !!(message.web_sources && message.web_sources.length > 0);
   const hasSources = !isUser && (hasCitations || hasWebSources);
   const sourceCount = (message.citations?.length || 0) + (message.web_sources?.length || 0);
-  const images = (message.images || []).filter((image) => !failedImages.has(image.url));
 
+  // A prompt copies without its "[Attached: …]" prefix; an answer copies as-is.
   const handleCopy = () => {
     if (!message.content) return;
-    navigator.clipboard.writeText(message.content);
+    navigator.clipboard.writeText(displayContent);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Clicking the active thumb clears it; the choice is rolled back if saving fails.
+  const handleFeedback = (value: MessageFeedback) => {
+    const previous = feedback;
+    const next = previous === value ? null : value;
+    setFeedback(next);
+    apiSetFeedback(message.chat_id, message.id, next).catch(() => setFeedback(previous));
+  };
+
+  const stopSpeaking = () => {
+    speechRunRef.current += 1;
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  };
+
+  const toggleSpeak = () => {
+    if (speaking) {
+      stopSpeaking();
+      return;
+    }
+    const chunks = speechChunks(toSpeechText(displayContent));
+    if (chunks.length === 0) return;
+    window.speechSynthesis.cancel(); // only one answer reads at a time
+    const run = ++speechRunRef.current;
+    chunks.forEach((chunk, i) => {
+      const utterance = new SpeechSynthesisUtterance(chunk);
+      const finish = () => {
+        if (speechRunRef.current === run) setSpeaking(false);
+      };
+      utterance.onerror = finish;
+      if (i === chunks.length - 1) utterance.onend = finish;
+      window.speechSynthesis.speak(utterance);
+    });
+    setSpeaking(true);
+  };
+
+  // Stop reading if this answer leaves the screen (chat switch, regenerate, delete).
+  const speakingRef = useRef(false);
+  speakingRef.current = speaking;
+  useEffect(() => {
+    return () => {
+      if (speakingRef.current) window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  const startEditing = () => {
+    setDraft(displayContent);
+    setIsEditing(true);
+  };
+
+  const submitEdit = () => {
+    const text = draft.trim();
+    if (!text || editDisabled) return;
+    setIsEditing(false);
+    if (text !== displayContent.trim()) onEdit?.(text);
   };
 
   const isInterrupted = message.source_type === 'interrupted' || message.source_type === 'error';
@@ -75,7 +172,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   return (
     <>
       <div className={`py-6 px-4 md:px-8 transition-colors ${isUser ? 'bg-[#fbfbf9] dark:bg-[#07070b] border-b border-[#e8e8e3] dark:border-[#14141e]' : 'bg-[#ffffff] dark:bg-[#000000] border-b border-[#ecece8] dark:border-[#101016]'}`}>
-        <div className="max-w-4xl mx-auto flex gap-4 items-start">
+        <div className={`max-w-4xl mx-auto flex gap-4 items-start ${isUser ? 'flex-row-reverse' : ''}`}>
           {/* Avatar */}
           <div className="shrink-0 mt-0.5">
             {isUser ? (
@@ -90,9 +187,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
 
           {/* Content Area */}
-          <div className="flex-1 min-w-0">
+          <div className={`flex-1 min-w-0 ${isUser ? 'flex flex-col items-end' : ''}`}>
             {/* Header info (role name + badges + action buttons) */}
-            <div className="flex items-center justify-between mb-2">
+            <div className={`flex items-center mb-2 ${isUser ? 'flex-row-reverse gap-3' : 'justify-between'}`}>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
                   {isUser ? 'You' : 'Clyptus.AI'}
@@ -130,22 +227,46 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 )}
               </div>
 
-              <div className="flex items-center gap-1.5">
-                {!isStreaming && message.content && (
-                  <button
-                    onClick={handleCopy}
-                    className="text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300 transition p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-xs flex items-center gap-1 cursor-pointer"
-                    title="Copy response"
-                  >
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
-                  </button>
-                )}
-              </div>
             </div>
 
             {/* Body Content */}
-            {isStreaming && !message.content ? (
+            {isUser && isEditing ? (
+              <div className="w-full max-w-[85%] rounded-2xl px-3 py-2.5 bg-white dark:bg-[#0b0b12] border border-orange-300 dark:border-orange-500/40 shadow-sm">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      submitEdit();
+                    } else if (e.key === 'Escape') {
+                      setIsEditing(false);
+                    }
+                  }}
+                  autoFocus
+                  rows={Math.min(8, Math.max(2, draft.split('\n').length))}
+                  aria-label="Edit your question"
+                  className="w-full resize-y bg-transparent text-sm text-slate-800 dark:text-slate-200 leading-relaxed outline-none"
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitEdit}
+                    disabled={!draft.trim() || editDisabled}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-orange-500 hover:bg-orange-600 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            ) : isStreaming && !message.content ? (
               /* Pipeline Status Indicator with Company Logo Orange Accents */
               <div className="flex items-center gap-2.5 py-1.5 text-slate-600 dark:text-slate-300 text-sm select-none">
                 <span className="font-medium text-orange-500 dark:text-orange-400 animate-pulse">
@@ -167,7 +288,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 </span>
               </div>
             ) : (
-              <div className="prose-sap text-sm text-slate-800 dark:text-slate-200 leading-relaxed break-words">
+              <div className={`prose-sap text-sm text-slate-800 dark:text-slate-200 leading-relaxed break-words ${isUser ? 'max-w-[85%] rounded-2xl rounded-tr-sm px-4 py-2.5 bg-orange-50/80 dark:bg-[#13131d] border border-orange-200/70 dark:border-orange-500/20' : ''}`}>
                 {isUser && effectiveAttachments && effectiveAttachments.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-3 not-prose">
                     {effectiveAttachments.map((att, idx) => (
@@ -188,6 +309,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
+                    img: () => null,
+                    a: ({ href, children }) => {
+                      const safe = href && /^(https?:|mailto:)/i.test(href);
+                      return safe ? <a href={href} target="_blank" rel="noopener noreferrer nofollow">{children}</a> : <>{children}</>;
+                    },
                     table: ({ node, ...props }) => (
                       <div className="overflow-x-auto my-3 border border-slate-200 dark:border-[#1e1e2c] rounded-xl bg-white dark:bg-[#08080c]">
                         <table className="min-w-full divide-y divide-slate-200 dark:divide-[#1e1e2c] text-left text-xs" {...props} />
@@ -228,45 +354,94 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               </div>
             )}
 
-            {!isUser && !isStreaming && images.length > 0 && (
-              <section className="mt-5 pt-4 border-t border-slate-200 dark:border-[#181824]" aria-label="Relevant images">
-                <div className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  <ImageIcon className="h-3.5 w-3.5 text-orange-500" />
-                  <span>Relevant images</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {images.map((image) => (
-                    <figure key={image.url} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm dark:border-[#242434] dark:bg-[#0b0b12]">
-                      <a
-                        href={image.source_url || image.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={`Open source for ${image.alt_text || image.description || 'image'}`}
-                        className="block bg-slate-100 dark:bg-[#08080c]"
-                      >
-                        <img
-                          src={image.url}
-                          alt={image.alt_text || image.description || 'Relevant SAP technical visual'}
-                          loading="lazy"
-                          onError={() => setFailedImages((previous) => new Set(previous).add(image.url))}
-                          className="h-48 w-full object-contain transition-opacity hover:opacity-90"
-                        />
-                      </a>
-                      {(image.description || (isAdmin && (image.source_title || image.source_url))) && (
-                        <figcaption className="space-y-1.5 p-3 text-xs text-slate-600 dark:text-slate-300">
-                          {image.description && <p>{image.description}</p>}
-                          {isAdmin && image.source_url && (
-                            <a href={image.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-orange-600 hover:underline dark:text-orange-400">
-                              <span>{image.source_title || 'View image source'}</span>
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          )}
-                        </figcaption>
-                      )}
-                    </figure>
-                  ))}
-                </div>
-              </section>
+            {/* Prompt actions: copy, share, edit */}
+            {isUser && !isEditing && displayContent && (
+              <div className="mt-1.5 flex items-center gap-0.5">
+                <button type="button" onClick={handleCopy} className={promptActionClass} title={copied ? 'Copied' : 'Copy prompt'} aria-label="Copy prompt">
+                  {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                </button>
+                {isStoredMessage(message) && (
+                  <button type="button" onClick={() => setShowShare(true)} className={promptActionClass} title="Share prompt" aria-label="Share prompt">
+                    <Share className="w-4 h-4" />
+                  </button>
+                )}
+                {onEdit && (
+                  <button
+                    type="button"
+                    onClick={startEditing}
+                    disabled={editDisabled}
+                    className={promptActionClass}
+                    title={editDisabled ? 'Wait for the current answer to finish' : 'Edit prompt'}
+                    aria-label="Edit prompt"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Answer actions: copy, rate, read aloud, share, regenerate */}
+            {!isUser && !isStreaming && displayContent && (
+              <div className="mt-3 flex items-center gap-0.5">
+                <button type="button" onClick={handleCopy} className={promptActionClass} title={copied ? 'Copied' : 'Copy'} aria-label="Copy response">
+                  {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                </button>
+                {isStoredMessage(message) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleFeedback('up')}
+                      className={promptActionClass}
+                      title="Good response"
+                      aria-label="Good response"
+                      aria-pressed={feedback === 'up'}
+                    >
+                      <ThumbsUp className={`w-4 h-4 ${feedback === 'up' ? 'text-slate-800 dark:text-slate-100' : ''}`} fill={feedback === 'up' ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFeedback('down')}
+                      className={promptActionClass}
+                      title="Bad response"
+                      aria-label="Bad response"
+                      aria-pressed={feedback === 'down'}
+                    >
+                      <ThumbsDown className={`w-4 h-4 ${feedback === 'down' ? 'text-slate-800 dark:text-slate-100' : ''}`} fill={feedback === 'down' ? 'currentColor' : 'none'} />
+                    </button>
+                  </>
+                )}
+                {canSpeak && (
+                  <button
+                    type="button"
+                    onClick={toggleSpeak}
+                    className={promptActionClass}
+                    title={speaking ? 'Stop reading' : 'Read aloud'}
+                    aria-label={speaking ? 'Stop reading' : 'Read aloud'}
+                  >
+                    {speaking ? <Square className="w-4 h-4" fill="currentColor" /> : <Volume2 className="w-4 h-4" />}
+                  </button>
+                )}
+                {isStoredMessage(message) && (
+                  <button type="button" onClick={() => setShowShare(true)} className={promptActionClass} title="Share response" aria-label="Share response">
+                    <Share className="w-4 h-4" />
+                  </button>
+                )}
+                {onRegenerate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (speaking) stopSpeaking();
+                      onRegenerate();
+                    }}
+                    disabled={editDisabled}
+                    className={promptActionClass}
+                    title={editDisabled ? 'Wait for the current answer to finish' : 'Regenerate response'}
+                    aria-label="Regenerate response"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
             )}
 
             {/* Interrupted / Error retry banner */}
@@ -340,6 +515,16 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
         </div>
       </div>
+
+      {showShare && (
+        <SharePromptModal
+          chatId={message.chat_id}
+          messageId={message.id}
+          prompt={displayContent}
+          isAnswer={!isUser}
+          onClose={() => setShowShare(false)}
+        />
+      )}
 
       {/* Citation Detail Modal - only rendered for admin */}
       {isAdmin && (

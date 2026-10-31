@@ -2,7 +2,7 @@ import React from 'react';
 import { Database, Globe, Layers, AlertCircle, Sparkles, GitBranch, FileText } from 'lucide-react';
 
 interface SourceTypeBadgeProps {
-  sourceType?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document';
+  sourceType?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable';
 }
 
 export const SourceTypeBadge: React.FC<SourceTypeBadgeProps> = ({ sourceType }) => {
@@ -31,6 +31,15 @@ export const SourceTypeBadge: React.FC<SourceTypeBadgeProps> = ({ sourceType }) 
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
         <AlertCircle className="w-3 h-3 text-amber-400" />
         <span>Generation Paused</span>
+      </span>
+    );
+  }
+
+  if (sourceType === 'unavailable') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
+        <AlertCircle className="w-3 h-3 text-amber-400" />
+        <span>Response unavailable</span>
       </span>
     );
   }

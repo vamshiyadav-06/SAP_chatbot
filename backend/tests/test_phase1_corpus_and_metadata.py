@@ -10,7 +10,6 @@ Verifies:
 
 import pytest
 import json
-import sqlite3
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -140,6 +139,17 @@ def test_context_packing_tier_inference_bug_fix():
     # Courseware must be official_sap
     t5 = context_packing_service.infer_chunk_tier({"document_name": "BR234_EN_SOM 2.pdf"})
     assert t5 == "official_sap"
+
+
+def test_synthetic_pdf_generators_do_not_claim_official_or_confidential_status():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sap_generator = (root / "generate_sap_docs.py").read_text(encoding="utf-8")
+    brim_generator = (root / "generate_brim_master_docs.py").read_text(encoding="utf-8")
+    assert "CONFIDENTIAL & PROPRIETARY" not in sap_generator
+    assert "OFFICIAL REFERENCE MANUAL" not in sap_generator
+    assert "Enterprise Official Technical Handbook" not in brim_generator
 
 
 def test_safe_official_ingestion_licence_gate():

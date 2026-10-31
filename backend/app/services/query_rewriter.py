@@ -3,6 +3,7 @@ import logging
 from typing import List, Dict, Any, Tuple
 from groq import Groq
 from backend.app.config import settings
+from backend.app.services.data_redaction import redact_external_text
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +16,10 @@ class QueryRewriter:
     """
 
     def __init__(self):
-        self.api_key = settings.LLM_API_KEY or settings.GROQ_API_KEY
+        self.api_key = settings.GROQ_API_KEY
         self.client = None
-        if self.api_key:
+        allowed = {p.strip().lower() for p in settings.LLM_ALLOWED_PROVIDERS.split(",") if p.strip()}
+        if self.api_key and "groq" in allowed:
             try:
                 self.client = Groq(api_key=self.api_key)
             except Exception as e:
@@ -34,6 +36,12 @@ class QueryRewriter:
             return False, "no_history"
 
         q = query.strip().lower()
+
+        # 0. Conversation memory queries (Never rewrite as follow-up!)
+        from backend.app.services.conversation_memory_service import conversation_memory_service, MemoryIntent
+        mem_intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
+        if mem_intent in (MemoryIntent.FIRST_MESSAGE_LOOKUP, MemoryIntent.LAST_MESSAGE_LOOKUP, MemoryIntent.HISTORY_RECALL, MemoryIntent.CROSS_CONVERSATION_RECALL):
+            return False, "conversation_memory_inquiry"
 
         # 1. Sentimental questions, greetings, and chit-chat (Never rewrite as follow-up!)
         greeting_patterns = [
@@ -97,7 +105,8 @@ class QueryRewriter:
             r"^what are (the )?benefits",
             r"^what are (the )?limitations",
             r"^what are its benefits",
-            r"^what are its components"
+            r"^what are its components",
+            r"^compare (this|that|it) with (the )?(previous|earlier|prior) approach",
         ]
         for trigger in short_followup_triggers:
             if re.search(trigger, q, re.IGNORECASE):
@@ -198,6 +207,9 @@ class QueryRewriter:
         if re.search(r"^(can you )?explain in detail", q_lower):
             return f"Explain {topic} in detail."
 
+        if re.search(r"^compare (this|that|it) with (the )?(previous|earlier|prior) approach", q_lower):
+            return f"Compare {topic} with the previous approach discussed earlier."
+
         # "what information does it contain"
         if "what information does it contain" in q_lower or "what does it contain" in q_lower:
             return f"What information does {topic} contain?"
@@ -280,14 +292,28 @@ class QueryRewriter:
                 ])
                 user_msg = f"Conversation History:\n{hist_text}\n\nLatest User Query: {cleaned_query}\n\nStandalone Question:"
 
-                candidate_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+                candidate_models = [m.strip() for m in settings.LLM_GROQ_MODELS.split(",") if m.strip()]
+                preferred_model = settings.LLM_MODEL.strip() if settings.LLM_PROVIDER.lower() == "groq" else ""
+                if preferred_model:
+                    candidate_models = [preferred_model] + [m for m in candidate_models if m != preferred_model]
+                if not settings.LLM_ALLOW_FREE_TIER:
+                    candidate_models = [m for m in candidate_models if ":free" not in m.lower()]
                 for model in candidate_models:
                     try:
+                        safe_msg, counts = redact_external_text(user_msg)
+                        try:
+                            from backend.app.services.audit_log import record
+                            record("llm_egress", actor_type="system", target=f"groq:{model}",
+                                   details={"provider": "groq", "model": model,
+                                            "estimated_input_tokens": (len(safe_msg) + len(system_prompt)) // 4,
+                                            "redaction_counts": counts, "purpose": "query_rewrite"})
+                        except Exception as audit_exc:
+                            logger.warning("LLM rewrite audit event failed (%s)", type(audit_exc).__name__)
                         res = self.client.chat.completions.create(
                             model=model,
                             messages=[
                                 {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_msg}
+                                {"role": "user", "content": safe_msg}
                             ],
                             temperature=0.0,
                             max_tokens=100
@@ -302,7 +328,7 @@ class QueryRewriter:
                                 "reason": f"llm_rewriter_{model}"
                             }
                     except Exception as llm_err:
-                        logger.warning(f"Model '{model}' query rewriting error: {llm_err}")
+                        logger.warning("Model '%s' query rewriting failed (%s)", model, type(llm_err).__name__)
                         continue
             except Exception as e:
                 logger.warning(f"LLM query rewriter error: {e}")

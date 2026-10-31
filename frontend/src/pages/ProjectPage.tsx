@@ -1,17 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowUpRight, MessageSquarePlus, Pin, PinOff, Settings2, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ProjectModal } from '../components/projects/ProjectModal';
 import { projectService } from '../services/projectService';
 import type { Project } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 export const ProjectPage: React.FC = () => {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const [projects, setProjects] = useState<Project[]>(() => projectService.getProjects());
+  const [projects, setProjects] = useState<Project[]>([]);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setProjects(user?.id ? projectService.getProjects(user.id) : []);
+  }, [user?.id]);
 
   const project = projects.find((item) => item.id === projectId);
 
@@ -35,8 +41,9 @@ export const ProjectPage: React.FC = () => {
   const renameProject = (values: { name: string; description?: string }) => {
     setError(null);
     try {
-      projectService.updateProject(projectId, values);
-      setProjects(projectService.getProjects());
+      if (!user?.id) return;
+      projectService.updateProject(user.id, projectId, values);
+      setProjects(projectService.getProjects(user.id));
       setEditing(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not update project.');
@@ -46,7 +53,8 @@ export const ProjectPage: React.FC = () => {
   const removeProject = () => {
     if (!window.confirm(`Delete "${project.name}"?`)) return;
     try {
-      projectService.deleteProject(projectId);
+      if (!user?.id) return;
+      projectService.deleteProject(user.id, projectId);
       navigate('/app', { replace: true });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not delete project.');
@@ -55,8 +63,9 @@ export const ProjectPage: React.FC = () => {
 
   const togglePin = () => {
     try {
-      projectService.updateProject(projectId, { isPinned: !project.isPinned });
-      setProjects(projectService.getProjects());
+      if (!user?.id) return;
+      projectService.updateProject(user.id, projectId, { isPinned: !project.isPinned });
+      setProjects(projectService.getProjects(user.id));
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not update project pin.');

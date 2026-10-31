@@ -4,12 +4,13 @@ from backend.app.schemas.citation import CitationResponse, WebSourceResponse, We
 
 class RAGQueryRequest(BaseModel):
     chat_id: Optional[str] = None
-    query: str
+    query: str = Field(..., max_length=4000)
 
 class RAGQueryResponse(BaseModel):
     answer: str
     source_type: str  # 'knowledge_base', 'web', 'refusal', 'error', 'combined'
-    grounding_score: float
+    # None when the answer did not go through retrieval and claim verification.
+    grounding_score: Optional[float] = None
     is_in_rag_pipeline: Optional[bool] = None
     kb_score: Optional[float] = None
     web_score: Optional[float] = None

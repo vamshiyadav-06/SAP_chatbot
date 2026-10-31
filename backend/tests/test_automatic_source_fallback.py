@@ -8,16 +8,19 @@ from backend.app.services.rag_service import RAGService
 
 def test_document_match_below_80_percent_triggers_multisource_search():
     confidence = {"confidence": 0.9, "should_trigger_tavily": False}
+    # Auto-fallback needs an explicitly enabled extra source (AUDIT_REPORT F-49).
     with patch.object(settings, "AUTO_MULTI_SOURCE_FALLBACK", True), patch.object(
         settings, "DOCUMENT_MATCH_THRESHOLD", 0.80
-    ):
+    ), patch.object(settings, "MULTI_SOURCE_COMPARE_ENABLED", True):
         assert RAGService._should_auto_compare(0.799, confidence) is True
         assert RAGService._should_auto_compare(0.80, confidence) is False
 
 
 def test_low_confidence_also_triggers_search_even_when_top_match_is_high():
     confidence = {"confidence": 0.65, "should_trigger_tavily": True}
-    with patch.object(settings, "AUTO_MULTI_SOURCE_FALLBACK", True):
+    with patch.object(settings, "AUTO_MULTI_SOURCE_FALLBACK", True), patch.object(
+        settings, "MULTI_SOURCE_COMPARE_ENABLED", True
+    ):
         assert RAGService._should_auto_compare(0.90, confidence) is True
 
 
@@ -41,7 +44,7 @@ def test_comparator_searches_github_and_web_then_selects_highest_weighted_match(
         "rerank_score": 0.92,
         "chunk_text": "SAP Convergent Invoicing processes billable items through documented steps.",
     }]
-    with patch("backend.app.retrieval.multi_source_compare.repo_store.search_repo_chunks", return_value=[]) as repo_search, patch(
+    with patch.object(settings, "WEB_FALLBACK_ENABLED", True),             patch("backend.app.retrieval.multi_source_compare.repo_store.search_repo_chunks", return_value=[]) as repo_search, patch(
         "backend.app.retrieval.multi_source_compare.web_search_service.search_sap_authoritative",
         return_value=web,
     ) as web_search, patch(

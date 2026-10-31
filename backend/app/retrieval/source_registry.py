@@ -26,6 +26,15 @@ from backend.app.retrieval.repo_registry import (
 )
 
 
+def hostname_matches(value: str, domain: str) -> bool:
+    """Match a hostname or URL to a domain without accepting lookalike suffixes."""
+    candidate = str(value or "").strip().lower()
+    parsed = urlparse(candidate if "://" in candidate else f"//{candidate}")
+    host = (parsed.hostname or "").rstrip(".")
+    expected = domain.strip().lower().rstrip(".")
+    return bool(host and expected and (host == expected or host.endswith("." + expected)))
+
+
 class RegisteredSourceEntry(BaseModel):
     source_id: str
     url: str
@@ -409,13 +418,11 @@ class SourceRegistry:
         if entry:
             return entry.authority_weight
         # Domain fallback
-        parsed = urlparse(url.lower())
-        domain = parsed.netloc
-        if "developers.sap.com" in domain or "help.sap.com" in domain:
+        if hostname_matches(url, "developers.sap.com") or hostname_matches(url, "help.sap.com"):
             return 0.85
-        if "community.sap.com" in domain or "blogs.sap.com" in domain:
+        if hostname_matches(url, "community.sap.com") or hostname_matches(url, "blogs.sap.com"):
             return 0.50
-        if "github.com" in domain:
+        if hostname_matches(url, "github.com"):
             return 0.80
         return 0.50
 

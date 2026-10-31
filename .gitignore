@@ -15,9 +15,8 @@ build/
 *.db.bak
 backend/sap_assistant.db
 
-# Large local source PDFs are intentionally not committed. Existing tracked PDFs
-# remain tracked; newly consolidated local PDFs stay available to ingestion.
-knowledge_base/documents/*.pdf
+# Knowledge base documents
+# Tracked in repository for complete knowledge base availability
 
 # Cloned GitHub repository snapshots (>500MB)
 backend/data/github_snapshots/
@@ -25,3 +24,6 @@ backend/data/github_snapshots/
 # Scratch & test outputs
 scratch/
 scratch_validation_output.json
+
+# SQLite cutover backups and migration logs (keep until deletion is authorized)
+backups/

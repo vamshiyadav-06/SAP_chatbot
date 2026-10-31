@@ -1,28 +1,29 @@
 import type { Project } from '../types';
+import { userStorageKey } from './userStorage';
 
-const STORAGE_KEY = 'clyptus_projects';
+const defaultProjects = (): Project[] => [{
+  id: 'proj_brim_core',
+  name: 'SAP BRIM Architecture',
+  description: 'BRIM Billing, Invoicing and Charging integration flows.',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  isPinned: true,
+}];
+
+const storageKey = (userId: string) => userStorageKey(userId, 'projects');
 
 export const projectService = {
-  getProjects(): Project[] {
+  getProjects(userId: string): Project[] {
     try {
-      const data = localStorage.getItem(STORAGE_KEY);
-      return data ? JSON.parse(data) : [
-        {
-          id: 'proj_brim_core',
-          name: 'SAP BRIM Architecture',
-          description: 'BRIM Billing, Invoicing and Charging integration flows.',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          isPinned: true,
-        }
-      ];
+      const data = localStorage.getItem(storageKey(userId));
+      return data ? JSON.parse(data) : defaultProjects();
     } catch {
       return [];
     }
   },
 
-  createProject(name: string, description?: string): Project {
-    const projects = this.getProjects();
+  createProject(userId: string, name: string, description?: string): Project {
+    const projects = this.getProjects(userId);
     const newProj: Project = {
       id: 'proj_' + Date.now().toString(36),
       name,
@@ -31,28 +32,25 @@ export const projectService = {
       updatedAt: new Date().toISOString(),
       isPinned: false,
     };
-    const updated = [newProj, ...projects];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    localStorage.setItem(storageKey(userId), JSON.stringify([newProj, ...projects]));
     return newProj;
   },
 
-  updateProject(id: string, updates: Partial<Pick<Project, 'name' | 'description' | 'isPinned'>>): Project {
-    const projects = this.getProjects();
+  updateProject(userId: string, id: string, updates: Partial<Pick<Project, 'name' | 'description' | 'isPinned'>>): Project {
+    const projects = this.getProjects(userId);
     let updatedProj: Project | null = null;
-    const updated = projects.map(p => {
-      if (p.id === id) {
-        updatedProj = { ...p, ...updates, updatedAt: new Date().toISOString() };
-        return updatedProj;
-      }
-      return p;
+    const updated = projects.map((project) => {
+      if (project.id !== id) return project;
+      updatedProj = { ...project, ...updates, updatedAt: new Date().toISOString() };
+      return updatedProj;
     });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    localStorage.setItem(storageKey(userId), JSON.stringify(updated));
     if (!updatedProj) throw new Error('Project not found');
     return updatedProj;
   },
 
-  deleteProject(id: string): void {
-    const projects = this.getProjects().filter(p => p.id !== id);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-  }
+  deleteProject(userId: string, id: string): void {
+    const projects = this.getProjects(userId).filter((project) => project.id !== id);
+    localStorage.setItem(storageKey(userId), JSON.stringify(projects));
+  },
 };

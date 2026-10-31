@@ -1,5 +1,4 @@
 import logging
-import hashlib
 import numpy as np
 from typing import List
 from backend.app.config import settings
@@ -11,25 +10,24 @@ import threading
 class EmbeddingService:
     def __init__(self):
         self._model = None
-        self._model_failed = False
         self.embedding_dim = settings.EMBEDDING_DIM
+        self.embedding_model = settings.EMBEDDING_MODEL
+        self.embedding_version = settings.EMBEDDING_VERSION
         self._query_cache: dict = {}
         self._cache_lock = threading.Lock()
 
     def _get_model(self):
         if self._model is not None:
             return self._model
-        if self._model_failed:
-            return None
         # Try FastEmbed ONNX runtime first (robust, fast, no AppLocker/torch DLL block)
         try:
             from fastembed import TextEmbedding
-            logger.info("Loading FastEmbed model: sentence-transformers/all-MiniLM-L6-v2")
-            self._model = ("fastembed", TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2"))
+            logger.info("Loading FastEmbed model: %s", self.embedding_model)
+            self._model = ("fastembed", TextEmbedding(model_name=self.embedding_model))
             logger.info("FastEmbed ONNX model loaded successfully.")
             return self._model
         except Exception as fe_err:
-            logger.info(f"FastEmbed not available ({fe_err}), trying SentenceTransformer...")
+            logger.info("FastEmbed could not load configured embedding model (%s); trying SentenceTransformer.", type(fe_err).__name__)
 
         try:
             from sentence_transformers import SentenceTransformer
@@ -38,34 +36,8 @@ class EmbeddingService:
             logger.info("SentenceTransformer model loaded successfully.")
             return self._model
         except Exception as e:
-            logger.warning(f"Could not load SentenceTransformer ({e}). Using robust fallback embedding generator.")
-            self._model_failed = True
-            return None
-
-    def _fallback_embed(self, text: str) -> List[float]:
-        """
-        Deterministic, normalized dense projection (dim=384) fallback
-        ensuring cosine similarity between semantically overlapping texts is high
-        even without a live network connection to HuggingFace.
-        """
-        dim = self.embedding_dim
-        vec = np.zeros(dim, dtype=np.float32)
-        words = text.lower().split()
-        if not words:
-            return vec.tolist()
-
-        for word in words:
-            # Hash word into 3 bucket dimensions with sign
-            h = int(hashlib.sha256(word.encode("utf-8")).hexdigest(), 16)
-            for i in range(3):
-                idx = (h >> (i * 10)) % dim
-                sign = 1.0 if ((h >> (i * 10 + 9)) & 1) else -1.0
-                vec[idx] += sign
-
-        norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec = vec / norm
-        return vec.tolist()
+            logger.error("Could not load SentenceTransformer model (%s).", type(e).__name__)
+            raise RuntimeError(f"Unable to load embedding model '{self.embedding_model}'.") from e
 
     def embed_text(self, text: str) -> List[float]:
         cleaned = text.strip()
@@ -77,28 +49,22 @@ class EmbeddingService:
             if cleaned in self._query_cache:
                 return self._query_cache[cleaned]
 
-        model_info = self._get_model()
-        if model_info:
-            tag, model = model_info
-            try:
-                if tag == "fastembed":
-                    emb = list(model.embed([cleaned]))[0]
-                else:
-                    emb = model.encode(cleaned, convert_to_numpy=True)
-                emb = np.array(emb, dtype=np.float32)
-                norm = np.linalg.norm(emb)
-                if norm > 0:
-                    emb = emb / norm
-                res = emb.tolist()
-                with self._cache_lock:
-                    if len(self._query_cache) >= 1024:
-                        self._query_cache.pop(next(iter(self._query_cache)))
-                    self._query_cache[cleaned] = res
-                return res
-            except Exception as e:
-                logger.warning(f"Embedding encoding error ({tag}): {e}. Falling back.")
-
-        res = self._fallback_embed(cleaned)
+        tag, model = self._get_model()
+        try:
+            if tag == "fastembed":
+                emb = list(model.embed([cleaned]))[0]
+            else:
+                emb = model.encode(cleaned, convert_to_numpy=True)
+            emb = np.array(emb, dtype=np.float32)
+            if emb.shape != (self.embedding_dim,):
+                raise ValueError(f"Expected {self.embedding_dim} dimensions, received {emb.shape}.")
+            norm = np.linalg.norm(emb)
+            if norm > 0:
+                emb = emb / norm
+            res = emb.tolist()
+        except Exception as e:
+            logger.error("Embedding encoding failed (%s, %s).", tag, type(e).__name__, exc_info=True)
+            raise RuntimeError(f"Embedding failed for configured model '{self.embedding_model}'.") from e
         with self._cache_lock:
             if len(self._query_cache) >= 1024:
                 self._query_cache.pop(next(iter(self._query_cache)))
@@ -109,32 +75,26 @@ class EmbeddingService:
         if not texts:
             return []
         cleaned_texts = [t.strip() for t in texts]
-        model_info = self._get_model()
-        if model_info:
-            tag, model = model_info
-            try:
-                if tag == "fastembed":
-                    embs_gen = model.embed(cleaned_texts, batch_size=64)
-                    result = []
-                    for emb in embs_gen:
-                        emb = np.array(emb, dtype=np.float32)
-                        norm = np.linalg.norm(emb)
-                        if norm > 0:
-                            emb = emb / norm
-                        result.append(emb.tolist())
-                    return result
-                else:
-                    embs = model.encode(cleaned_texts, batch_size=32, convert_to_numpy=True)
-                    result = []
-                    for emb in embs:
-                        norm = np.linalg.norm(emb)
-                        if norm > 0:
-                            emb = emb / norm
-                        result.append(emb.tolist())
-                    return result
-            except Exception as e:
-                logger.warning(f"Batch embedding error ({tag}): {e}. Falling back.")
-
-        return [self._fallback_embed(t) for t in cleaned_texts]
+        tag, model = self._get_model()
+        try:
+            if tag == "fastembed":
+                embs = list(model.embed(cleaned_texts, batch_size=64))
+            else:
+                embs = model.encode(cleaned_texts, batch_size=32, convert_to_numpy=True)
+            result = []
+            for emb in embs:
+                emb = np.asarray(emb, dtype=np.float32)
+                if emb.shape != (self.embedding_dim,):
+                    raise ValueError(f"Expected {self.embedding_dim} dimensions, received {emb.shape}.")
+                norm = np.linalg.norm(emb)
+                if norm > 0:
+                    emb = emb / norm
+                result.append(emb.tolist())
+            if len(result) != len(cleaned_texts):
+                raise ValueError("Embedding model returned an unexpected number of vectors.")
+            return result
+        except Exception as e:
+            logger.error("Batch embedding failed (%s, %s).", tag, type(e).__name__, exc_info=True)
+            raise RuntimeError(f"Embedding failed for configured model '{self.embedding_model}'.") from e
 
 embedding_service = EmbeddingService()

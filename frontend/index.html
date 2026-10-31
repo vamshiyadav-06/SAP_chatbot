@@ -7,23 +7,11 @@
     <title>Clyptus.AI — SAP + BRIM AI Knowledge Platform</title>
     <meta name="description" content="Clyptusap.ai is an enterprise AI knowledge assistant specialized strictly for SAP and SAP BRIM with private document grounding and authoritative citations." />
     <meta name="theme-color" content="#000000" />
-    <script>
-      (function() {
-        try {
-          const pref = localStorage.getItem('clyptus-appearance');
-          if (pref === 'light') {
-            document.documentElement.classList.remove('dark');
-          } else {
-            document.documentElement.classList.add('dark');
-          }
-        } catch (e) {
-          document.documentElement.classList.add('dark');
-        }
-      })();
-    </script>
+    <script src="/theme-init.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
   <body class="bg-[#ffffff] text-slate-900 dark:bg-[#000000] dark:text-slate-100 font-sans antialiased selection:bg-orange-500/30 selection:text-orange-200 transition-colors">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

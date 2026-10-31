@@ -64,6 +64,12 @@ GENERAL_UNRELATED_PATTERNS = [
     r"\b(weather|horoscope|zodiac|astrology|travel guide|hotel booking|flight ticket)\b",
 ]
 
+NON_SAP_REFUSAL_RESPONSE = (
+    "I can only assist with SAP and SAP-related topics. "
+    "Please ask questions related to SAP BRIM or other SAP modules. "
+    "For follow-up questions, make sure to mention SAP BRIM so I can provide more accurate and relevant answers."
+)
+
 
 class SAPClassifier:
     """Strict SAP-domain classifier."""
@@ -127,7 +133,7 @@ class SAPClassifier:
         text = query.strip().lower()
 
         if not text:
-            return False, "I can only help with SAP and SAP-related topics. Query cannot be empty."
+            return False, NON_SAP_REFUSAL_RESPONSE
 
         # Check for explicit SAP mention first
         has_sap_direct = cls._contains_term(text, "sap")
@@ -183,15 +189,15 @@ class SAPClassifier:
         # Explicitly reject sentimental questions & greetings without SAP context
         for pattern in SENTIMENTAL_AND_GREETING_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
-                return False, "I can only help with SAP and SAP-related topics. Please ask an SAP or SAP BRIM technical question."
+                return False, NON_SAP_REFUSAL_RESPONSE
 
         # Explicitly known unrelated questions
         for pattern in GENERAL_UNRELATED_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
-                return False, "I can only help with SAP and SAP-related topics."
+                return False, NON_SAP_REFUSAL_RESPONSE
 
         # Everything else without SAP context is rejected
-        return False, "I can only help with SAP and SAP-related topics."
+        return False, NON_SAP_REFUSAL_RESPONSE
 
 
 sap_classifier = SAPClassifier()

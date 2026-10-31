@@ -27,6 +27,7 @@ import { AssistantGuideModal } from '../components/ui/AssistantGuideModal';
 import { useAuth } from '../context/AuthContext';
 import { apiGetChats, apiCreateChat, apiDeleteChat } from '../services/api';
 import { projectService } from '../services/projectService';
+import { userStorageKey } from '../services/userStorage';
 import type { Chat, Project } from '../types';
 
 function dateGroup(chat: Chat): string {
@@ -39,9 +40,8 @@ function dateGroup(chat: Chat): string {
   return 'Earlier';
 }
 
-const PINNED_CHATS_KEY = 'clyptus_pinned_chats';
-
 export const AppLayout: React.FC = () => {
+  const { user, logout } = useAuth();
   const [query, setQuery] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -53,30 +53,30 @@ export const AppLayout: React.FC = () => {
 
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatsLoading, setChatsLoading] = useState(true);
-  const [projects, setProjects] = useState<Project[]>(() => projectService.getProjects());
-  const [pinnedChatIds, setPinnedChatIds] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(PINNED_CHATS_KEY) || '[]');
-    } catch {
-      return [];
-    }
-  });
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [pinnedChatIds, setPinnedChatIds] = useState<string[]>([]);
 
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
 
   const isConversation = location.pathname === '/app' || location.pathname.includes('/chat/');
 
-  const isTrialUser = !user || user.isGuest || user.email === 'consultant@clyptusap.ai';
-
-  // Refresh chats list (only for authenticated registered users)
-  const refreshChats = async () => {
-    if (isTrialUser) {
-      setChats([]);
-      setChatsLoading(false);
+  useEffect(() => {
+    if (!user?.id) {
+      setProjects([]);
+      setPinnedChatIds([]);
       return;
     }
+    setProjects(projectService.getProjects(user.id));
+    try {
+      setPinnedChatIds(JSON.parse(localStorage.getItem(userStorageKey(user.id, 'pinned_chats')) || '[]'));
+    } catch {
+      setPinnedChatIds([]);
+    }
+  }, [user?.id]);
+
+  // Refresh chats list for the signed-in account.
+  const refreshChats = async () => {
     try {
       const data = await apiGetChats();
       setChats(data);
@@ -89,7 +89,7 @@ export const AppLayout: React.FC = () => {
 
   useEffect(() => {
     refreshChats();
-  }, [location.pathname, isTrialUser]);
+  }, [location.pathname]);
 
   useEffect(() => {
     const applyTheme = () => {
@@ -189,7 +189,7 @@ export const AppLayout: React.FC = () => {
       setChats(prev => prev.filter(c => c.id !== chatId));
       setPinnedChatIds(prev => {
         const next = prev.filter(id => id !== chatId);
-        localStorage.setItem(PINNED_CHATS_KEY, JSON.stringify(next));
+        if (user?.id) localStorage.setItem(userStorageKey(user.id, 'pinned_chats'), JSON.stringify(next));
         return next;
       });
       if (location.pathname.includes(chatId)) {
@@ -204,8 +204,9 @@ export const AppLayout: React.FC = () => {
   const handleCreateProject = async (values: { name: string; description?: string }) => {
     try {
       setActionError(null);
-      const project = projectService.createProject(values.name, values.description);
-      setProjects(projectService.getProjects());
+      if (!user?.id) throw new Error('Sign in to manage projects.');
+      const project = projectService.createProject(user.id, values.name, values.description);
+      setProjects(projectService.getProjects(user.id));
       setProjectModalOpen(false);
       navigate(`/app/projects/${project.id}`);
     } catch (cause) {
@@ -216,15 +217,16 @@ export const AppLayout: React.FC = () => {
   const toggleChatPin = (chatId: string) => {
     setPinnedChatIds(prev => {
       const updated = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
-      localStorage.setItem(PINNED_CHATS_KEY, JSON.stringify(updated));
+      if (user?.id) localStorage.setItem(userStorageKey(user.id, 'pinned_chats'), JSON.stringify(updated));
       return updated;
     });
   };
 
   const toggleProjectPin = (projectId: string, currentPin: boolean) => {
     try {
-      projectService.updateProject(projectId, { isPinned: !currentPin });
-      setProjects(projectService.getProjects());
+      if (!user?.id) return;
+      projectService.updateProject(user.id, projectId, { isPinned: !currentPin });
+      setProjects(projectService.getProjects(user.id));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : 'Could not update pin.');
     }
@@ -434,16 +436,7 @@ export const AppLayout: React.FC = () => {
 
           {!chatsLoading && groupedChats.length === 0 && pinnedChats.length === 0 && (
             <div className="sidebar-empty-state">
-              {isTrialUser ? (
-                <div className="space-y-1 py-1">
-                  <span className="text-[11px] font-semibold text-orange-400 block">Preview Mode</span>
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-normal">
-                    Guest chats are temporary and not saved. Sign in to save your conversations.
-                  </p>
-                </div>
-              ) : (
-                <p>{normalizedQuery ? 'No matching conversations.' : 'Previous chats will appear here.'}</p>
-              )}
+              <p>{normalizedQuery ? 'No matching conversations.' : 'Previous chats will appear here.'}</p>
             </div>
           )}
 

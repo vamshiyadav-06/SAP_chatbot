@@ -18,6 +18,8 @@ from backend.app.retrieval.sap_web_doc_ingest import (
     StructuredTextHTMLParser
 )
 from backend.app.retrieval.multi_source_compare import multi_source_comparator
+from backend.app.services.confidence_scoring import passage_authority, WEB_AUTHORITY
+from backend.app.services.context_packing_service import context_packing_service
 
 
 # ==============================================================================
@@ -220,6 +222,18 @@ def test_authority_ranking_distinguishes_official_vs_community():
     assert dev_weight > community_weight
     assert help_weight > community_weight
     assert repo_weight > community_weight
+
+
+def test_authority_domain_matching_rejects_lookalike_hostnames():
+    comparator = multi_source_comparator
+    assert comparator.get_source_authority_weight("unknown", "help.sap.com.evil.tld") == 0.50
+    assert comparator.get_source_authority_weight("unknown", "sub.help.sap.com") == 0.85
+    assert source_registry.get_authority_weight("https://help.sap.com.evil.tld/doc") == 0.50
+    assert source_registry.get_authority_weight("https://sub.help.sap.com/doc") == 0.85
+    assert passage_authority({"source_type": "web", "domain": "help.sap.com.evil.tld"}) == WEB_AUTHORITY["official_sap_other"]
+    assert context_packing_service.infer_chunk_tier({
+        "source_type": "web", "url": "https://help.sap.com.evil.tld/doc"
+    }) == "forum"
 
 
 # ==============================================================================

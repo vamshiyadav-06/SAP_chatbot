@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, ShieldCheck, Mail, Lock, User, Sparkles, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ShieldCheck, Mail, Lock, User, AlertCircle } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BrandLogo } from '../components/navbar/BrandLogo';
 import { PageMeta } from '../components/ui/PageMeta';
 import { useAuth } from '../context/AuthContext';
 
 export const LoginPage: React.FC = () => {
-  const { user, login, register, guestLogin } = useAuth();
+  const { user, login, register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -22,14 +22,17 @@ export const LoginPage: React.FC = () => {
   }, [searchParams]);
 
   const [name, setName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() =>
+    searchParams.get('expired') ? 'Your session has expired. Please sign in again.' : null
+  );
   const [loading, setLoading] = useState(false);
 
   // If already logged in with a real registered account, redirect to workspace
   React.useEffect(() => {
-    if (user && !user.isGuest && user.email !== 'consultant@clyptusap.ai') {
+    if (user) {
       navigate('/app', { replace: true });
     }
   }, [user, navigate]);
@@ -44,23 +47,11 @@ export const LoginPage: React.FC = () => {
         await login(email.trim(), password);
       } else {
         if (!name.trim()) throw new Error('Please enter your full name');
-        await register(name.trim(), email.trim(), password);
+        await register(name.trim(), email.trim(), password, inviteCode.trim() || undefined);
       }
       navigate('/app', { replace: true });
     } catch (err: any) {
-      setError(err.message || 'Authentication failed. Please verify credentials or try Demo Access.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDemoAccess = async () => {
-    setLoading(true);
-    try {
-      await guestLogin();
-      navigate('/app', { replace: true });
-    } catch {
-      navigate('/app', { replace: true });
+      setError(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
       setLoading(false);
     }
@@ -143,6 +134,21 @@ export const LoginPage: React.FC = () => {
                 </div>
               )}
 
+              {mode === 'register' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    Invite Code <span className="font-normal text-slate-400">(if your administrator gave you one)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    autoComplete="off"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
                   Email Address
@@ -187,30 +193,11 @@ export const LoginPage: React.FC = () => {
               </button>
             </form>
 
-            <div className="relative my-5">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-200 dark:border-slate-700" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-wider text-slate-400">
-                <span className="bg-[#f8f8f6] dark:bg-[#191a18] px-2">or quick access</span>
-              </div>
-            </div>
-
-            {/* Quick Demo Access */}
-            <button
-              type="button"
-              onClick={handleDemoAccess}
-              className="button button-outline w-full flex items-center justify-center gap-2 border-dashed border-slate-400 hover:border-slate-600 transition cursor-pointer"
-            >
-              <Sparkles size={14} className="text-orange-500" />
-              <span>Instant Test Drive (1-Click Guest)</span>
-            </button>
-
             <div className="login-safe">
               <ShieldCheck size={15} />
               <span>
                 Enterprise Security &amp; JWT isolation<br />
-                <small>Connected to FastAPI &amp; PostgreSQL/SQLite RAG backend</small>
+                <small>Connected to FastAPI &amp; PostgreSQL + pgvector RAG backend</small>
               </span>
             </div>
           </div>

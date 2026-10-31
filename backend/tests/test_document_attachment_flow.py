@@ -8,6 +8,17 @@ from backend.app.services.rag_service import rag_service
 from backend.app.database import SessionLocal
 
 
+def _guest_headers(client):
+    """Extraction requires a signed-in user (the old /auth/demo guest login no longer exists)."""
+    from types import SimpleNamespace
+    from backend.app.security.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id="test-user", email="test@example.com", name="Test", role="consultant", is_admin=False,
+        token_version=0, groups=["all"],
+    )
+    return {}
+
+
 def test_document_extractor_pdf():
     # Create in-memory sample PDF
     doc = fitz.open()
@@ -47,6 +58,7 @@ def test_extract_endpoint_api():
 
     response = client.post(
         "/api/chats/extract-document",
+            headers=_guest_headers(client),
         files={"file": ("billing_spec.pdf", pdf_bytes, "application/pdf")}
     )
 

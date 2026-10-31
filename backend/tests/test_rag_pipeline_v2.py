@@ -1,10 +1,14 @@
 import pytest
+import uuid
+from unittest.mock import patch
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
 from backend.app.database import SessionLocal, init_db
 from backend.app.config import settings
+from backend.app.models.chunk import DocumentChunk
+from backend.app.models.document import Document
 from backend.app.services.rag_service import rag_service
 from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.reranking_service import reranking_service
@@ -265,10 +269,30 @@ def test_11_database_retrieval_stability(db_session):
     Ensures hybrid search returns chunk records from the indexed database
     without errors or empty responses for standard queries.
     """
-    results = retrieval_service.hybrid_search(db_session, "billable item", top_k=5)
-    assert len(results) > 0
-    assert "chunk_text" in results[0]
-    assert "document_name" in results[0]
+    filename = f"retrieval_stability_{uuid.uuid4().hex}.pdf"
+    document = Document(filename=filename, title="Retrieval stability", file_hash=uuid.uuid4().hex * 2,
+                        allowed_groups=["all"], source_tier="official_sap")
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(DocumentChunk(
+        document_id=document.id, document_name=filename, chunk_index=0, page_number=1,
+        section="Billable Items", chunk_text="A billable item represents a service or product prepared for billing.",
+        embedding=[1.0] + [0.0] * (settings.EMBEDDING_DIM - 1),
+        embedding_model=settings.EMBEDDING_MODEL, embedding_version=settings.EMBEDDING_VERSION,
+    ))
+    db_session.commit()
+    retrieval_service.invalidate_cache()
+    try:
+        with patch("backend.app.services.retrieval_service.embedding_service.embed_text",
+                   return_value=[1.0] + [0.0] * (settings.EMBEDDING_DIM - 1)):
+            results = retrieval_service.hybrid_search(db_session, "billable item", top_k=5)
+        assert any(result["document_name"] == filename for result in results)
+        assert "chunk_text" in results[0]
+        assert "document_name" in results[0]
+    finally:
+        db_session.delete(document)
+        db_session.commit()
+        retrieval_service.invalidate_cache()
 
 
 # ==============================================================================
@@ -280,4 +304,4 @@ def test_12_failure_resilience(db_session):
     """
     res = rag_service.process_query(db_session, "Explain the weather in Paris")
     assert res["source_type"] == "refusal"
-    assert "only help with sap" in res["answer"].lower()
+    assert "only assist with sap" in res["answer"].lower() or "only help with sap" in res["answer"].lower()

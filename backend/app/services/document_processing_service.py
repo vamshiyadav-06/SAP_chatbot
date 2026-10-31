@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from backend.app.config import settings
+from backend.app.security.log_safety import privacy_fingerprint
 from backend.app.database import SessionLocal
 from backend.app.models.document import Document
 from backend.app.models.chunk import DocumentChunk
@@ -26,8 +27,41 @@ logger = logging.getLogger("document_processing")
 
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff",
-    ".txt", ".md", ".markdown", ".csv", ".json", ".log", ".tsv", ".xml", ".sql", ".yaml", ".yml"
+    ".txt", ".md", ".markdown", ".csv", ".log", ".tsv"
 }
+EXTENDED_UPLOAD_EXTENSIONS = {".json", ".xml", ".sql", ".yaml", ".yml"}
+
+
+def allowed_upload_extensions() -> Set[str]:
+    if settings.ALLOW_EXTENDED_UPLOAD_TYPES:
+        return SUPPORTED_EXTENSIONS | EXTENDED_UPLOAD_EXTENSIONS
+    return SUPPORTED_EXTENSIONS
+
+
+def validate_upload_signature(filename: str, prefix: bytes) -> None:
+    """Reject common extension/content mismatches before a document is registered."""
+    suffix = Path(filename).suffix.lower()
+    signatures = {
+        ".jpg": prefix.startswith(b"\xff\xd8\xff"),
+        ".jpeg": prefix.startswith(b"\xff\xd8\xff"),
+        ".png": prefix.startswith(b"\x89PNG\r\n\x1a\n"),
+        ".webp": prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP",
+        ".bmp": prefix.startswith(b"BM"),
+        ".tiff": prefix.startswith((b"II*\x00", b"MM\x00*")),
+        ".docx": prefix.startswith(b"PK\x03\x04"),
+    }
+    if suffix == ".pdf":
+        valid = b"%PDF-" in prefix[:1024]
+    elif suffix in signatures:
+        valid = signatures[suffix]
+    else:
+        try:
+            prefix.decode("utf-8-sig")
+            valid = b"\x00" not in prefix
+        except UnicodeDecodeError:
+            valid = False
+    if not valid:
+        raise ValueError("File content does not match the selected document format.")
 
 
 class DocumentProcessingService:
@@ -113,7 +147,7 @@ class DocumentProcessingService:
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
-            if suffix not in SUPPORTED_EXTENSIONS:
+            if suffix not in allowed_upload_extensions():
                 continue
 
             filename = path.name
@@ -141,7 +175,7 @@ class DocumentProcessingService:
                     existing_filenames.add(filename)
                     synced_count += 1
                 except Exception as e:
-                    logger.error(f"Error registering discovered file '{filename}': {e}")
+                    logger.error("Could not register discovered document_ref=%s (%s)", privacy_fingerprint(filename), type(e).__name__)
 
         if synced_count > 0:
             db.commit()
@@ -205,6 +239,8 @@ class DocumentProcessingService:
                 "stage": doc.stage or ("Indexed" if c_count > 0 else "Pending"),
                 "error_message": doc.error_message,
                 "vector_indexed": bool(doc.vector_indexed and c_count > 0),
+                "allowed_groups": list(doc.allowed_groups or []),
+                "source_tier": doc.source_tier,
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
             })
@@ -241,7 +277,7 @@ class DocumentProcessingService:
     def register_uploaded_file(
         self,
         filename: str,
-        file_bytes: bytes,
+        file_bytes: Any,
         db: Session
     ) -> Dict[str, Any]:
         """
@@ -249,22 +285,37 @@ class DocumentProcessingService:
         Prevents unintentional overwrites by generating a safe unique name if a different file
         with the same name already exists.
         """
-        if not file_bytes:
-            raise ValueError("Uploaded file is empty (0 bytes).")
-
         suffix = Path(filename).suffix.lower()
-        if suffix not in SUPPORTED_EXTENSIONS:
+        allowed_extensions = allowed_upload_extensions()
+        if suffix not in allowed_extensions:
             raise ValueError(
-                f"Unsupported file format '{suffix}'. Supported formats are: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+                f"Unsupported file format '{suffix}'. Supported formats are: {', '.join(sorted(allowed_extensions))}"
             )
+
+        source = io.BytesIO(file_bytes) if isinstance(file_bytes, bytes) else file_bytes
+        source.seek(0)
+        prefix = source.read(2048)
+        source.seek(0)
+        validate_upload_signature(filename, prefix)
+
+        import hashlib
+        hasher = hashlib.sha256()
+        file_size = 0
+        while True:
+            block = source.read(1024 * 1024)
+            if not block:
+                break
+            file_size += len(block)
+            if file_size > settings.MAX_UPLOAD_BYTES:
+                raise ValueError("Uploaded file exceeds the configured per-file size limit.")
+            hasher.update(block)
+        if file_size == 0:
+            raise ValueError("Uploaded file is empty (0 bytes).")
+        file_hash = hasher.hexdigest()
+        source.seek(0)
 
         source_dir = settings.DOCUMENTS_DIR
         source_dir.mkdir(parents=True, exist_ok=True)
-
-        # Compute SHA-256
-        import hashlib
-        hasher = hashlib.sha256(file_bytes)
-        file_hash = hasher.hexdigest()
 
         # Clean base name
         stem = Path(filename).stem
@@ -290,14 +341,19 @@ class DocumentProcessingService:
 
         # Write to disk
         with open(target_path, "wb") as f:
-            f.write(file_bytes)
+            while True:
+                block = source.read(1024 * 1024)
+                if not block:
+                    break
+                f.write(block)
+        source.seek(0)
 
         doc_info = document_service.get_document_info(target_filename)
         doc_type = suffix.lstrip(".")
 
         if existing_doc:
             existing_doc.file_hash = file_hash
-            existing_doc.file_size_bytes = len(file_bytes)
+            existing_doc.file_size_bytes = file_size
             existing_doc.status = "pending"
             existing_doc.stage = "Ready for processing"
             existing_doc.vector_indexed = False
@@ -313,7 +369,7 @@ class DocumentProcessingService:
                 title=doc_info["title"],
                 file_hash=file_hash,
                 file_type=doc_type,
-                file_size_bytes=len(file_bytes),
+                file_size_bytes=file_size,
                 version="1.0",
                 page_count=0,
                 status="pending",
@@ -324,7 +380,7 @@ class DocumentProcessingService:
             db.commit()
             db.refresh(doc_record)
 
-        self._log_event(f"Registered uploaded document '{target_filename}' (ID: {doc_record.id}, Size: {self._format_size(len(file_bytes))})")
+        self._log_event(f"Registered uploaded document_ref={privacy_fingerprint(target_filename)} (ID: {doc_record.id}, Size: {self._format_size(file_size)})")
 
         return {
             "id": str(doc_record.id),
@@ -373,10 +429,10 @@ class DocumentProcessingService:
             self._execute_pipeline(db, document_ids, force)
         except Exception as e:
             logger.error(f"Fatal error in document processing worker: {e}", exc_info=True)
-            self._log_event(f"Fatal error in pipeline: {e}")
+            self._log_event(f"Fatal processing failure ({type(e).__name__})")
             self._broadcast({
                 "is_processing": False,
-                "current_stage": f"Error: {e}",
+                "current_stage": "DOCUMENT_PROCESSING_FAILED",
                 "verification_status": "Failed",
             })
         finally:
@@ -451,7 +507,8 @@ class DocumentProcessingService:
             filename = doc.filename
             file_path = settings.DOCUMENTS_DIR / filename
 
-            self._log_event(f"[{idx}/{total_docs}] Starting processing for '{filename}'")
+            file_ref = privacy_fingerprint(filename)
+            self._log_event(f"[{idx}/{total_docs}] Starting processing document_ref={file_ref}")
 
             # Update state to Processing
             doc.status = "processing"
@@ -523,7 +580,7 @@ class DocumentProcessingService:
 
                 num_chunks = len(all_chunks)
                 total_chunks += num_chunks
-                self._log_event(f"'{filename}': Generated {num_chunks} chunks. Creating embeddings...")
+                self._log_event(f"document_ref={file_ref}: Generated {num_chunks} chunks. Creating embeddings...")
 
                 doc.stage = "Creating embeddings..."
                 db.commit()
@@ -567,6 +624,8 @@ class DocumentProcessingService:
                             chunk_text=chunk_data["chunk_text"],
                             metadata_json=json.dumps(meta),
                             embedding=embeddings[j],
+                            embedding_model=embedding_service.embedding_model,
+                            embedding_version=embedding_service.embedding_version,
                         )
                         db.add(chunk_record)
                         inserted_chunks += 1
@@ -603,7 +662,7 @@ class DocumentProcessingService:
                 db.commit()
 
                 completed_count += 1
-                self._log_event(f"'{filename}' processed successfully ({num_chunks} chunks, {inserted_chunks} vectors verified).")
+                self._log_event(f"document_ref={file_ref} processed successfully ({num_chunks} chunks, {inserted_chunks} vectors verified).")
 
                 self._broadcast({
                     "current_stage": "Processing completed successfully!",
@@ -613,7 +672,7 @@ class DocumentProcessingService:
                 })
 
             except Exception as doc_err:
-                logger.error(f"Error processing document '{filename}': {doc_err}", exc_info=True)
+                logger.error("Error processing document_ref=%s (%s)", file_ref, type(doc_err).__name__, exc_info=True)
                 db.rollback()
 
                 # Clean up any partial chunks so no orphaned vectors remain
@@ -625,18 +684,18 @@ class DocumentProcessingService:
 
                 doc.status = "failed"
                 doc.stage = "Failed"
-                doc.error_message = str(doc_err)
+                doc.error_message = "DOCUMENT_PROCESSING_FAILED"
                 doc.vector_indexed = False
                 doc.updated_at = datetime.now(timezone.utc)
                 db.commit()
 
                 failed_count += 1
-                self._log_event(f"'{filename}' failed: {doc_err}")
+                self._log_event(f"document_ref={file_ref} failed: {type(doc_err).__name__}")
 
                 self._broadcast({
                     "failed_count": failed_count,
                     "processing_count": 0,
-                    "current_stage": f"Failed: {doc_err}",
+                    "current_stage": "DOCUMENT_PROCESSING_FAILED",
                     "overall_progress_pct": int(((completed_count + failed_count) / total_docs) * 100),
                 })
 
@@ -703,16 +762,16 @@ class DocumentProcessingService:
                 file_path.unlink()
                 file_deleted_from_disk = True
         except Exception as e:
-            logger.warning(f"Could not remove physical file '{file_path}': {e}")
+            logger.warning("Could not remove physical document_ref=%s (%s)", privacy_fingerprint(filename), type(e).__name__)
 
         # 4. Invalidate retrieval cache immediately so RAG chatbot never retrieves this document
         try:
             retrieval_service.invalidate_cache()
-            logger.info(f"Retrieval cache invalidated following deletion of '{filename}'")
+            logger.info("Retrieval cache invalidated following document deletion (document_ref=%s)", privacy_fingerprint(filename))
         except Exception as e:
             logger.warning(f"Could not invalidate retrieval cache: {e}")
 
-        self._log_event(f"Permanently deleted document '{filename}' (Purged {chunk_count} vectors).")
+        self._log_event(f"Permanently deleted document_ref={privacy_fingerprint(filename)} (purged {chunk_count} vectors).")
 
         return {
             "success": True,

@@ -22,6 +22,8 @@ interface ChatInputProps {
   onSendMessage: (message: string, attachments?: DocumentAttachment[]) => void;
   onStop?: () => void;
   isLoading: boolean;
+  /** Text to start with, e.g. a prompt opened from a share link. */
+  initialInput?: string;
 }
 
 interface LocalAttachment {
@@ -36,7 +38,21 @@ interface LocalAttachment {
   text?: string;
   preview?: string;
   errorMessage?: string;
+  thumbUrl?: string;
+  detected_question?: string | null;
+  analysis_method?: string | null;
 }
+
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp'];
+const PASTE_IMAGE_TYPES: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+};
+const IMAGE_ACCEPT = '.png,.jpg,.jpeg,.webp,.bmp,image/png,image/jpeg,image/webp,image/bmp';
+
+const isImageType = (fileType: string) => IMAGE_EXTENSIONS.includes(fileType);
 
 // Extend Window interface for SpeechRecognition browser API
 declare global {
@@ -48,8 +64,8 @@ declare global {
   }
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isLoading }) => {
-  const [input, setInput] = useState('');
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isLoading, initialInput = '' }) => {
+  const [input, setInput] = useState(initialInput);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -187,6 +203,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
       case 'doc':
         return 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30';
       case 'png':
+      case 'jpg':
+      case 'jpeg':
+      case 'webp':
+      case 'bmp':
         return 'bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/30';
       case 'csv':
       case 'xlsx':
@@ -206,14 +226,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
     if (fileArray.length === 0) return;
     setShowAttachMenu(false);
 
-    const newItems: LocalAttachment[] = fileArray.map((f) => ({
-      id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-      file: f,
-      name: f.name,
-      size: f.size,
-      file_type: f.name.split('.').pop()?.toLowerCase() || 'txt',
-      status: 'extracting',
-    }));
+    const newItems: LocalAttachment[] = fileArray.map((f) => {
+      const fileType = f.name.split('.').pop()?.toLowerCase() || 'txt';
+      return {
+        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        file: f,
+        name: f.name,
+        size: f.size,
+        file_type: fileType,
+        status: 'extracting',
+        thumbUrl: isImageType(fileType) ? URL.createObjectURL(f) : undefined,
+      };
+    });
 
     setAttachments((prev) => [...prev, ...newItems]);
 
@@ -230,6 +254,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                   char_count: res.char_count,
                   text: res.text,
                   preview: res.preview,
+                  detected_question: res.detected_question,
+                  analysis_method: res.analysis_method,
                 }
               : a
           )
@@ -257,8 +283,30 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
     event.currentTarget.value = '';
   };
 
+  // Ctrl+V / Cmd+V of a screenshot attaches it like an uploaded image; plain text pastes normally.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type in PASTE_IMAGE_TYPES)
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (images.length === 0) return;
+    e.preventDefault();
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const named = images.map(
+      (f, i) =>
+        new File([f], `pasted-image-${stamp}${images.length > 1 ? `-${i + 1}` : ''}.${PASTE_IMAGE_TYPES[f.type]}`, {
+          type: f.type,
+        })
+    );
+    void handleFilesSelected(named);
+  };
+
   const removeAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setAttachments((prev) => {
+      const removed = prev.find((a) => a.id === id);
+      if (removed?.thumbUrl) URL.revokeObjectURL(removed.thumbUrl);
+      return prev.filter((a) => a.id !== id);
+    });
   };
 
   const isExtracting = attachments.some((a) => a.status === 'extracting');
@@ -283,10 +331,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
 
     if (isListening) stopListening();
 
-    const finalQuery = trimmedInput || 'Please analyze the attached document(s), summarizing key sections and explaining core findings.';
+    const readyImages = attachments.filter((a) => a.status === 'ready' && a.text && isImageType(a.file_type));
+    const detectedQuestions = readyImages
+      .map((a) => a.detected_question?.trim())
+      .filter((q): q is string => !!q);
+
+    let defaultQuery = 'Please analyze the attached document(s), summarizing key sections and explaining core findings.';
+    if (readyImages.length > 0 && readyImages.length === readyAttachments.length) {
+      defaultQuery = detectedQuestions.length > 0
+        ? `Explain what the attached image shows and give clear step-by-step instructions to resolve this: ${detectedQuestions.join(' Also: ')}`
+        : 'Explain what the attached image shows. If it contains an error, issue or question, explain the likely cause and give clear step-by-step instructions to fix or answer it.';
+    }
+    const finalQuery = trimmedInput || defaultQuery;
 
     onSendMessage(finalQuery, readyAttachments);
     setInput('');
+    attachments.forEach((a) => a.thumbUrl && URL.revokeObjectURL(a.thumbUrl));
     setAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -348,7 +408,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
       <input
         type="file"
         ref={imageInputRef}
-        accept=".png,image/png"
+        accept={IMAGE_ACCEPT}
         multiple
         className="hidden"
         onChange={handleFileInputChange}
@@ -356,7 +416,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
       <input
         type="file"
         ref={allInputRef}
-        accept=".pdf,.docx,.png,image/png,.txt,.md,.csv,.json,.log,.tsv,.xml,.sql,.yaml,.yml"
+        accept={`.pdf,.docx,${IMAGE_ACCEPT},.txt,.md,.csv,.json,.log,.tsv,.xml,.sql,.yaml,.yml`}
         multiple
         className="hidden"
         onChange={handleFileInputChange}
@@ -401,13 +461,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
               const isPdf = att.file_type === 'pdf';
               const isDoc = att.file_type === 'docx' || att.file_type === 'doc';
               const isData = ['csv', 'json', 'xlsx'].includes(att.file_type);
+              const isImage = isImageType(att.file_type);
 
               return (
                 <div
                   key={att.id}
                   className="group relative flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-[#12121a] border border-slate-200 dark:border-[#222230] text-xs transition-all hover:border-orange-400 dark:hover:border-orange-500/40 shadow-xs max-w-xs"
                 >
-                  {/* File Format Icon */}
+                  {/* File Format Icon (thumbnail for images) */}
+                  {isImage && att.thumbUrl ? (
+                    <img
+                      src={att.thumbUrl}
+                      alt=""
+                      className="w-8 h-8 rounded-md object-cover border border-violet-500/30 shrink-0"
+                    />
+                  ) : (
                   <div className={`p-1 rounded-md border shrink-0 ${getFileBadgeColor(att.file_type)}`}>
                     {isPdf ? (
                       <FileText className="w-3.5 h-3.5" />
@@ -415,12 +483,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                       <FileText className="w-3.5 h-3.5" />
                     ) : isData ? (
                       <FileSpreadsheet className="w-3.5 h-3.5" />
-                    ) : att.file_type === 'png' ? (
+                    ) : isImage ? (
                       <ImageIcon className="w-3.5 h-3.5" />
                     ) : (
                       <FileCode className="w-3.5 h-3.5" />
                     )}
                   </div>
+                  )}
 
                   {/* Name and extraction status */}
                   <div className="flex flex-col min-w-0 pr-1">
@@ -431,14 +500,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                       {att.status === 'extracting' && (
                         <>
                           <Loader2 className="w-2.5 h-2.5 text-orange-500 animate-spin" />
-                          <span>Extracting content...</span>
+                          <span>{isImage ? 'Reading image...' : 'Extracting content...'}</span>
                         </>
                       )}
                       {att.status === 'ready' && (
                         <>
                           <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
                           <span>
-                            {att.page_count ? `${att.page_count} ${att.page_count === 1 ? 'page' : 'pages'} · ` : ''}
+                            {isImage
+                              ? `${att.analysis_method === 'ocr' ? 'Text read (OCR)' : 'Image analysed'} · `
+                              : att.page_count ? `${att.page_count} ${att.page_count === 1 ? 'page' : 'pages'} · ` : ''}
                             {formatFileSize(att.size)}
                           </span>
                         </>
@@ -473,12 +544,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={
             isListening
               ? 'Listening... speak now'
               : attachments.length > 0
-              ? 'Ask any question about the attached document(s)...'
-              : 'Ask anything about SAP or attach documents with +'
+              ? 'Ask a question about the attachment, or press Enter to have it explained...'
+              : 'Ask anything about SAP, paste a screenshot (Ctrl+V), or attach documents with +'
           }
           rows={1}
           disabled={isLoading}
@@ -582,8 +654,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                       <ImageIcon className="w-4 h-4" />
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-xs font-semibold">Upload PNG Image</span>
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400">Reads visible text with OCR (.png)</span>
+                      <span className="text-xs font-semibold">Upload Image or Screenshot</span>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">Reads and explains errors & questions (.png, .jpg, .webp)</span>
                     </div>
                   </button>
 
@@ -666,7 +738,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
 
       <div className="text-center mt-2 flex items-center justify-center gap-1.5 flex-wrap">
         <span className="text-[11px] text-slate-400 dark:text-slate-500">
-          Click <strong className="text-orange-500 font-semibold">+</strong> to upload PDFs, documents, or PNG images. Clyptus.AI extracts content for grounded answers.
+          Click <strong className="text-orange-500 font-semibold">+</strong> to upload documents or images, or paste a screenshot with <strong className="font-semibold">Ctrl+V</strong>. Clyptus.AI reads it and explains any error or question it shows.
         </span>
       </div>
     </div>

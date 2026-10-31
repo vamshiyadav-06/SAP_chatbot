@@ -1,29 +1,36 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, Lock } from 'lucide-react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { ChevronDown } from 'lucide-react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import type { Message, DocumentAttachment } from '../types';
 import { ChatMessage } from '../components/chat/ChatMessage';
+import { isStoredMessage } from '../components/chat/messageUtils';
 import { ChatInput } from '../components/chat/ChatInput';
 import { WelcomeScreen } from '../components/chat/WelcomeScreen';
-import { AuthLimitModal } from '../components/chat/AuthLimitModal';
-import { useAuth } from '../context/AuthContext';
 
 import {
   apiCreateChat,
   apiGetMessages,
   apiStreamMessage,
+  apiEditMessageStream,
   apiSavePartialMessage,
+  type StreamCallbacks,
   type StreamMetadata,
   type StreamStatus,
 } from '../services/api';
 
-const GUEST_QUERY_LIMIT = 2;
-const GUEST_COUNT_KEY = 'clyptus_trial_query_count';
 
 export const ChatPage: React.FC = () => {
   const { conversationId } = useParams<{ conversationId?: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const location = useLocation();
+  // A prompt opened from a share link pre-fills the input; the user decides whether to send it.
+  const [prefillPrompt] = useState<string>(() => (location.state as { prefillPrompt?: string } | null)?.prefillPrompt ?? '');
+
+  useEffect(() => {
+    // Drop the router state so a page refresh doesn't pre-fill again.
+    if (prefillPrompt) navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -31,23 +38,14 @@ export const ChatPage: React.FC = () => {
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
   const [streamingMeta, setStreamingMeta] = useState<StreamMetadata | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [trialCount, setTrialCount] = useState<number>(() => {
-    try {
-      return parseInt(localStorage.getItem(GUEST_COUNT_KEY) || '0', 10);
-    } catch {
-      return 0;
-    }
-  });
-
-  const isTrialUser = !user || user.isGuest || user.email === 'consultant@clyptusap.ai';
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Server-issued id of the running stream; required to save a stopped answer.
+  const streamIdRef = useRef<string | null>(null);
   const lastUserPromptRef = useRef<string>('');
   const justCreatedChatIdRef = useRef<string | null>(null);
-  const guestChatIdRef = useRef<string | null>(null);
 
   const isAutoScrollingRef = useRef(false);
 
@@ -67,17 +65,6 @@ export const ChatPage: React.FC = () => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   };
-
-  // For guest users, do not restore previous chats on refresh or mount; keep session fresh at /app
-  useEffect(() => {
-    if (isTrialUser) {
-      if (conversationId) {
-        navigate('/app', { replace: true });
-      }
-      setMessages([]);
-      guestChatIdRef.current = null;
-    }
-  }, [isTrialUser, conversationId, navigate]);
 
   // Prevent browser from navigating to file/folder when dropped outside the dropzone
   useEffect(() => {
@@ -106,12 +93,8 @@ export const ChatPage: React.FC = () => {
     setIsUserScrolledUp(distanceFromBottom > 90);
   };
 
-  // Load messages when conversationId changes (only for authenticated registered users)
+  // Load messages when conversationId changes.
   useEffect(() => {
-    if (isTrialUser) {
-      return;
-    }
-
     if (conversationId && justCreatedChatIdRef.current === conversationId) {
       // Don't reset state if this navigation was triggered by creating a chat for the current stream
       justCreatedChatIdRef.current = null;
@@ -138,7 +121,7 @@ export const ChatPage: React.FC = () => {
     } else {
       setMessages([]);
     }
-  }, [conversationId, isTrialUser]);
+  }, [conversationId]);
 
   const accumulatedTargetRef = useRef<string>('');
   const displayedTextRef = useRef<string>('');
@@ -178,7 +161,7 @@ export const ChatPage: React.FC = () => {
       const stoppedContent = currentStream.trim() ? currentStream : 'Generation stopped.';
       const stoppedAssistantMsg: Message = {
         id: streamingMeta?.message_id || `stopped-${Date.now()}`,
-        chat_id: conversationId || guestChatIdRef.current || '',
+        chat_id: conversationId || '',
         role: 'assistant',
         content: stoppedContent,
         source_type: 'interrupted',
@@ -191,8 +174,8 @@ export const ChatPage: React.FC = () => {
 
       setMessages((prev) => [...prev, stoppedAssistantMsg]);
 
-      if (conversationId && !isTrialUser && stoppedContent.trim()) {
-        apiSavePartialMessage(conversationId, stoppedContent).catch(() => {});
+      if (conversationId && stoppedContent.trim() && streamIdRef.current) {
+        apiSavePartialMessage(conversationId, stoppedContent, streamIdRef.current).catch(() => {});
       }
     }
 
@@ -202,49 +185,21 @@ export const ChatPage: React.FC = () => {
   };
 
   const handleSendMessage = async (content: string, attachments?: DocumentAttachment[]) => {
-    // Check trial limit for free preview users
-    if (isTrialUser && trialCount >= GUEST_QUERY_LIMIT) {
-      setShowAuthModal(true);
-      return;
-    }
-
-    if (isTrialUser) {
-      const nextCount = trialCount + 1;
-      setTrialCount(nextCount);
-      localStorage.setItem(GUEST_COUNT_KEY, String(nextCount));
-    }
+    // One answer streams at a time; a second stream would share the reveal ticker and refs.
+    if (isLoading) return;
 
     lastUserPromptRef.current = content;
-    let targetChatId = isTrialUser ? guestChatIdRef.current : conversationId;
-
-    // If no active chat in route, create one for streaming
-    if (!targetChatId) {
-      try {
-        const title = content.length > 35 ? content.slice(0, 35) + '...' : content;
-        const newChat = await apiCreateChat(title);
-        targetChatId = newChat.id;
-        if (isTrialUser) {
-          // Keep guest on /app without updating URL route so refresh leaves no trace
-          guestChatIdRef.current = newChat.id;
-        } else {
-          justCreatedChatIdRef.current = newChat.id;
-          navigate(`/app/chat/${newChat.id}`, { replace: true });
-        }
-      } catch (err) {
-        console.error('Could not create initial chat:', err);
-        return;
-      }
-    }
+    let targetChatId = conversationId;
 
     const displayContent =
       attachments && attachments.length > 0 && !content.startsWith('[Attached')
         ? `[Attached: ${attachments.map((a) => `${a.name} (${a.page_count || 1} pages)`).join(', ')}]\n\n${content}`
         : content;
 
-    // Optimistically add user message to UI
+    // Show the prompt before any request, so a failure below can never make it disappear.
     const tempUserMsg: Message = {
       id: `user-${Date.now()}`,
-      chat_id: targetChatId,
+      chat_id: targetChatId || '',
       role: 'user',
       content: displayContent,
       attachments,
@@ -254,9 +209,63 @@ export const ChatPage: React.FC = () => {
     };
 
     setMessages((prev) => [...prev, tempUserMsg]);
+    await streamAnswer(
+      () => targetChatId || '',
+      tempUserMsg.id,
+      attachments && attachments.length > 0 ? 'Analyzing attached document(s)...' : 'Thinking...',
+      async (callbacks, signal) => {
+        // A first question starts a chat; failures are shown in the chat by streamAnswer.
+        if (!targetChatId) {
+          const title = content.length > 35 ? content.slice(0, 35) + '...' : content;
+          let newChat;
+          try {
+            newChat = await apiCreateChat(title);
+          } catch (err) {
+            throw err;
+          }
+          targetChatId = newChat.id;
+          setMessages((prev) => prev.map((m) => (m.id === tempUserMsg.id ? { ...m, chat_id: newChat.id } : m)));
+          justCreatedChatIdRef.current = newChat.id;
+          navigate(`/app/chat/${newChat.id}`, { replace: true });
+          if (signal.aborted) return;
+        }
+        await apiStreamMessage(targetChatId, content, callbacks, signal, attachments);
+      }
+    );
+  };
+
+  // Rewrites a sent prompt: everything after it is discarded and a new answer is streamed.
+  const handleEditMessage = async (messageId: string, newText: string) => {
+    const text = newText.trim();
+    const targetChatId = conversationId;
+    if (!text || isLoading || !targetChatId) return;
+
+    lastUserPromptRef.current = text;
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === messageId);
+      if (idx === -1) return prev;
+      const original = prev[idx];
+      // Files attached to the original prompt stay attached (the backend keeps them too).
+      const attachedPrefix = original.content.match(/^\[Attached:\s*.+?\]\n\n/)?.[0] ?? '';
+      return [...prev.slice(0, idx), { ...original, content: attachedPrefix + text }];
+    });
+
+    await streamAnswer(() => targetChatId, messageId, 'Thinking...', (callbacks, signal) =>
+      apiEditMessageStream(targetChatId, messageId, text, callbacks, signal)
+    );
+  };
+
+  // Drives the typewriter reveal for one answer stream and adds the finished answer to the chat.
+  const streamAnswer = async (
+    // A getter because a first question only gets its chat id once `start` has created the chat.
+    getChatId: () => string,
+    userMessageId: string,
+    initialStage: string,
+    start: (callbacks: StreamCallbacks, signal: AbortSignal) => Promise<void>
+  ) => {
     setIsLoading(true);
     setStreamingContent('');
-    setStreamingStage(attachments && attachments.length > 0 ? 'Analyzing attached document(s)...' : 'Thinking...');
+    setStreamingStage(initialStage);
     setStreamingMeta(null);
     setIsUserScrolledUp(false);
 
@@ -335,71 +344,82 @@ export const ChatPage: React.FC = () => {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    streamIdRef.current = null;
 
     let streamMetaRef: StreamMetadata = {};
 
-    await apiStreamMessage(
-      targetChatId,
-      content,
-      {
-        onStatus: (status: StreamStatus) => {
-          setStreamingStage(status.message);
-        },
-        onMetadata: (meta: StreamMetadata) => {
-          streamMetaRef = { ...streamMetaRef, ...meta };
-          setStreamingMeta(streamMetaRef);
-        },
-        onToken: (token: string) => {
-          accumulatedTargetRef.current += token;
-        },
-        onDone: (doneMeta: StreamMetadata, finalText?: string) => {
-          const effectiveMeta = { ...streamMetaRef, ...doneMeta };
-          if (finalText && finalText.length > accumulatedTargetRef.current.length) {
-            accumulatedTargetRef.current = finalText;
-          }
-          pendingDoneRef.current = {
-            meta: effectiveMeta,
-            finalText,
-            targetChatId: targetChatId!,
-          };
-        },
-        onError: (err: any) => {
-          console.error('Stream error:', err);
-          if (tickerRef.current) {
-            clearInterval(tickerRef.current);
-            tickerRef.current = null;
-          }
-          pendingDoneRef.current = null;
-          setIsLoading(false);
-          abortControllerRef.current = null;
-
-          const resolvedContent =
-            displayedTextRef.current.trim() ||
-            accumulatedTargetRef.current.trim() ||
-            'Generation interrupted. Please try again.';
-
-          const errorMsg: Message = {
-            id: `err-${Date.now()}`,
-            chat_id: targetChatId!,
-            role: 'assistant',
-            content: resolvedContent,
-            source_type: 'error',
-            grounding_score: streamMetaRef.grounding_score,
-            created_at: new Date().toISOString(),
-            citations: streamMetaRef.citations || [],
-            web_sources: streamMetaRef.web_sources || [],
-            images: streamMetaRef.images || [],
-          };
-
-          setMessages((prev) => [...prev, errorMsg]);
-          setStreamingContent(null);
-          setStreamingStage(null);
-          setStreamingMeta(null);
-        },
+    const callbacks: StreamCallbacks = {
+      onStreamId: (streamId: string) => {
+        streamIdRef.current = streamId;
       },
-      controller.signal,
-      attachments
-    );
+      onUserMessage: (storedId: string) => {
+        // Swap the optimistic id for the stored one so this prompt can be edited later.
+        setMessages((prev) => prev.map((m) => (m.id === userMessageId ? { ...m, id: storedId } : m)));
+      },
+      onStatus: (status: StreamStatus) => {
+        setStreamingStage(status.message);
+      },
+      onMetadata: (meta: StreamMetadata) => {
+        streamMetaRef = { ...streamMetaRef, ...meta };
+        setStreamingMeta(streamMetaRef);
+      },
+      onToken: (token: string) => {
+        accumulatedTargetRef.current += token;
+      },
+      onDone: (doneMeta: StreamMetadata, finalText?: string) => {
+        const effectiveMeta = { ...streamMetaRef, ...doneMeta };
+        if (finalText && finalText.length > accumulatedTargetRef.current.length) {
+          accumulatedTargetRef.current = finalText;
+        }
+        pendingDoneRef.current = {
+          meta: effectiveMeta,
+          finalText,
+          targetChatId: getChatId(),
+        };
+      },
+      onError: (err: any) => {
+        console.error('Stream error:', err);
+        if (tickerRef.current) {
+          clearInterval(tickerRef.current);
+          tickerRef.current = null;
+        }
+        pendingDoneRef.current = null;
+        setIsLoading(false);
+        abortControllerRef.current = null;
+
+        // Keep whatever answer text arrived; otherwise say why there is none.
+        const resolvedContent =
+          accumulatedTargetRef.current.trim() ||
+          displayedTextRef.current.trim() ||
+          (err instanceof Error && err.message) ||
+          'Generation interrupted. Please try again.';
+
+        const errorMsg: Message = {
+          id: `err-${Date.now()}`,
+          chat_id: getChatId(),
+          role: 'assistant',
+          content: resolvedContent,
+          source_type: 'error',
+          grounding_score: streamMetaRef.grounding_score,
+          created_at: new Date().toISOString(),
+          citations: streamMetaRef.citations || [],
+          web_sources: streamMetaRef.web_sources || [],
+          images: streamMetaRef.images || [],
+        };
+
+        setMessages((prev) => [...prev, errorMsg]);
+        setStreamingContent(null);
+        setStreamingStage(null);
+        setStreamingMeta(null);
+      },
+    };
+
+    try {
+      await start(callbacks, controller.signal);
+    } catch (err) {
+      // Anything `start` throws (e.g. the chat could not be created) must not leave the chat loading.
+      if (!controller.signal.aborted) callbacks.onError?.(err);
+    }
   };
 
   return (
@@ -417,11 +437,26 @@ export const ChatPage: React.FC = () => {
           <div className="flex-1 pb-4">
             {messages.map((msg, idx) => {
               const isLast = idx === messages.length - 1;
+              // Regenerating re-runs the question before the latest answer through the edit flow.
+              const question = idx > 0 ? messages[idx - 1] : undefined;
+              const canRegenerate =
+                isLast && msg.role === 'assistant' && question?.role === 'user' && isStoredMessage(question);
               return (
                 <ChatMessage
                   key={msg.id}
                   message={msg}
                   onSelectFollowUp={(q) => handleSendMessage(q)}
+                  onEdit={
+                    msg.role === 'user' && isStoredMessage(msg)
+                      ? (text) => handleEditMessage(msg.id, text)
+                      : undefined
+                  }
+                  editDisabled={isLoading}
+                  onRegenerate={
+                    canRegenerate
+                      ? () => handleEditMessage(question!.id, question!.content.replace(/^\[Attached:\s*.+?\]\n\n/, ''))
+                      : undefined
+                  }
                   onRetry={
                     isLast && (msg.source_type === 'error' || msg.source_type === 'interrupted')
                       ? () => handleSendMessage(lastUserPromptRef.current)
@@ -470,46 +505,14 @@ export const ChatPage: React.FC = () => {
         )}
       </div>
 
-      {/* Trial Preview Status Pill */}
-      {isTrialUser && (
-        <div className="w-full max-w-4xl mx-auto px-4 pt-1 flex items-center justify-center">
-          {trialCount < GUEST_QUERY_LIMIT ? (
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-50 dark:bg-[#0c0c12] border border-orange-200 dark:border-orange-500/25 text-[11px] text-orange-800 dark:text-orange-300 shadow-sm">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
-              <span>Free Preview: <strong>{trialCount} of {GUEST_QUERY_LIMIT}</strong> questions used</span>
-              <button
-                type="button"
-                onClick={() => navigate('/login?mode=register')}
-                className="text-orange-600 dark:text-white hover:text-orange-700 dark:hover:text-orange-200 underline font-semibold ml-1 cursor-pointer"
-              >
-                Sign up for unlimited
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setShowAuthModal(true)}
-              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-orange-950/60 border border-orange-500/40 text-[11px] text-orange-200 hover:bg-orange-900/50 transition cursor-pointer shadow-md shadow-orange-500/10"
-            >
-              <Lock size={12} className="text-orange-400" />
-              <span>Preview limit reached (2/2) · <strong>Sign in or Sign up to continue</strong></span>
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Bottom Input Area */}
       <ChatInput
         onSendMessage={handleSendMessage}
         onStop={handleStopGeneration}
         isLoading={isLoading}
+        initialInput={prefillPrompt}
       />
 
-      <AuthLimitModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        questionCount={trialCount}
-      />
     </div>
   );
 };

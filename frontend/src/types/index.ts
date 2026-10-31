@@ -3,8 +3,8 @@ export interface User {
   email: string;
   name: string;
   is_admin?: boolean;
+  groups?: string[];
   role?: string;
-  isGuest?: boolean;
   avatar?: string;
   dateOfBirth?: string;
   profileCompleted?: boolean;
@@ -48,17 +48,19 @@ export interface DocumentAttachment {
   preview?: string;
 }
 
+export type MessageFeedback = 'up' | 'down';
+
 export interface Message {
   id: string;
   chat_id: string;
   role: 'user' | 'assistant';
   content: string;
   attachments?: DocumentAttachment[];
-  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document';
-  grounding_score?: number;
+  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable';
+  grounding_score?: number | null;
   confidence?: number;
   grounding?: string;
-  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted';
+  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted' | 'unavailable';
   internal_evidence_confidence?: number;
   selected_evidence_quality?: number;
   kb_score?: number;
@@ -68,6 +70,7 @@ export interface Message {
   is_in_rag_pipeline?: boolean;
   external_search_used?: boolean;
   follow_up_questions?: string[];
+  feedback?: MessageFeedback | null;
   security_restricted?: boolean;
   violation_category?: string;
   created_at: string;

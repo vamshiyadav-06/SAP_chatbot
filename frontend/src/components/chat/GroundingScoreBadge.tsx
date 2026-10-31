@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { CheckCircle2, Sparkles, AlertCircle, Info, Target } from 'lucide-react';
 
 interface GroundingScoreBadgeProps {
-  score?: number;
-  verificationStatus?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted';
+  score?: number | null;
+  verificationStatus?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted' | 'unavailable';
 }
 
 export const GroundingScoreBadge: React.FC<GroundingScoreBadgeProps> = ({

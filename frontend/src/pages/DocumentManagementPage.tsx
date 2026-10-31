@@ -39,10 +39,6 @@ import { Navigate } from 'react-router-dom';
 export const DocumentManagementPage: React.FC = () => {
   const { user } = useAuth();
 
-  if (!user?.is_admin) {
-    return <Navigate to="/admin/login" replace />;
-  }
-
   // Document state
   const [documents, setDocuments] = useState<KBDocument[]>([]);
 
@@ -353,6 +349,10 @@ export const DocumentManagementPage: React.FC = () => {
   };
 
   const pendingOrFailedCount = counts.pending + counts.failed;
+
+  if (!user?.is_admin) {
+    return <Navigate to="/admin/login" replace />;
+  }
 
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 p-4 md:p-8">

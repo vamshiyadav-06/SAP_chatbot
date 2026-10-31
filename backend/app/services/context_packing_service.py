@@ -2,6 +2,7 @@ import re
 import logging
 from typing import List, Dict, Any, Set, Tuple, Optional
 from backend.app.config import settings
+from backend.app.retrieval.source_registry import hostname_matches
 from backend.app.schemas.grounded_generation import PackedChunk, ContextPackingResult
 
 logger = logging.getLogger(__name__)
@@ -84,12 +85,13 @@ class ContextPackingService:
 
         # Web tier classification
         if source_type == "web" or url.startswith("http"):
-            if any(dom in url for dom in ["help.sap.com", "learning.sap.com", "support.sap.com", "sap.com/documentation"]):
+            sap_documentation = hostname_matches(url, "sap.com") and "/documentation" in url
+            if any(hostname_matches(url, dom) for dom in ["help.sap.com", "learning.sap.com", "support.sap.com"]) or sap_documentation:
                 return "official-sap-domain"
             return "forum"
 
         doc_name = (chunk.get("document_name") or chunk.get("source") or "").strip()
-        tier_field = chunk.get("tier") or chunk.get("authority_tier_name")
+        tier_field = chunk.get("source_tier") or chunk.get("provenance_tier") or chunk.get("tier") or chunk.get("authority_tier_name")
         if tier_field in TIER_RANK_PREFERENCE:
             return tier_field
 
@@ -136,7 +138,7 @@ class ContextPackingService:
             return getattr(settings, "TIER_WEIGHT_FORUM_WEB", 0.50)
         elif tier == "self_authored":
             return getattr(settings, "TIER_WEIGHT_SELF_AUTHORED", 0.60)
-        return 0.70
+        return getattr(settings, "TIER_WEIGHT_SELF_AUTHORED", 0.60)
 
     def infer_chunk_module(self, chunk: Dict[str, Any]) -> str:
         """Determines primary SAP module for a chunk."""

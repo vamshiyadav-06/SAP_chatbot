@@ -1,44 +1,31 @@
 import uuid
-import json
-from typing import List
-from sqlalchemy import Column, String, Integer, Text, ForeignKey, TypeDecorator
+import numpy as np
+from sqlalchemy import BigInteger, Column, ForeignKey, Identity, Integer, String, Text, TypeDecorator
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from backend.app.database import Base
 from backend.app.config import settings
 
+
 class EmbeddingVector(TypeDecorator):
-    """Platform-independent vector type that uses pgvector on Postgres and JSON on SQLite."""
-    impl = Text
+    """pgvector vector(EMBEDDING_DIM) column.
+
+    Results are returned as plain Python lists (not numpy arrays) because callers
+    rely on list semantics such as `if emb and len(emb) == dim`.
+    """
+    impl = Vector
     cache_ok = True
 
-    def load_dialect_impl(self, dialect):
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(Vector(settings.EMBEDDING_DIM))
-        return dialect.type_descriptor(Text())
-
-    def process_bind_param(self, value, dialect):
-        if value is None:
-            return None
-        if dialect.name == "postgresql":
-            return value
-        if isinstance(value, (list, tuple)):
-            return json.dumps(list(value))
-        return value
+    def __init__(self, dim: int = settings.EMBEDDING_DIM):
+        super().__init__(dim)
 
     def process_result_value(self, value, dialect):
         if value is None:
             return None
-        if dialect.name == "postgresql":
-            if hasattr(value, "tolist"):
-                return value.tolist()
-            return list(value)
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except Exception:
-                return []
-        return value
+        # pgvector stores float32 and prints the shortest decimal per component; parsing that
+        # straight to float64 yields a nearby value. Widening through float32 returns exactly
+        # the stored values (identical to the float32-derived floats the embedder produced).
+        return np.asarray(value, dtype=np.float32).astype(np.float64).tolist()
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
@@ -52,5 +39,10 @@ class DocumentChunk(Base):
     chunk_text = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)
     embedding = Column(EmbeddingVector, nullable=False)
+    embedding_model = Column(String(255), nullable=False, default=settings.EMBEDDING_MODEL, server_default="legacy-unknown")
+    embedding_version = Column(String(64), nullable=False, default=settings.EMBEDDING_VERSION, server_default="legacy-unknown")
+    # Monotonic insertion sequence (carried over from the SQLite rowid). Retrieval loads
+    # chunks in this order so rank ties break exactly as they did before the migration.
+    insertion_order = Column(BigInteger, Identity(always=False), nullable=False, index=True)
 
     document = relationship("Document", back_populates="chunks")

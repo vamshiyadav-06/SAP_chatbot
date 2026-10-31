@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Plus, Search, Layers, LogOut, Shield, ChevronLeft, Pin, Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Chat } from '../../types';
 import { ChatListItem } from './ChatListItem';
 import { ShareModal } from '../chat/ShareModal';
 import { useAuth } from '../../context/AuthContext';
+import { userStorageKey } from '../../services/userStorage';
 
 interface SidebarProps {
   chats: Chat[];
@@ -33,29 +34,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [showPinned, setShowPinned] = useState(true);
 
   // Persistent Pinned Chats in localStorage
-  const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem('sap_assistant_pinned');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [archivedIds, setArchivedIds] = useState<string[]>([]);
 
-  // Persistent Archived Chats in localStorage
-  const [archivedIds, setArchivedIds] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem('sap_assistant_archived');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
+  useEffect(() => {
+    if (!user?.id) {
+      setPinnedIds([]);
+      setArchivedIds([]);
+      return;
     }
-  });
+    try {
+      setPinnedIds(JSON.parse(localStorage.getItem(userStorageKey(user.id, 'pinned_chats')) || '[]'));
+    } catch {
+      setPinnedIds([]);
+    }
+    try {
+      setArchivedIds(JSON.parse(localStorage.getItem(userStorageKey(user.id, 'archived_chats')) || '[]'));
+    } catch {
+      setArchivedIds([]);
+    }
+  }, [user?.id]);
 
   const togglePin = (id: string) => {
     setPinnedIds((prev) => {
       const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      localStorage.setItem('sap_assistant_pinned', JSON.stringify(next));
+      if (user?.id) localStorage.setItem(userStorageKey(user.id, 'pinned_chats'), JSON.stringify(next));
       return next;
     });
   };
@@ -63,7 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const toggleArchive = (id: string) => {
     setArchivedIds((prev) => {
       const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      localStorage.setItem('sap_assistant_archived', JSON.stringify(next));
+      if (user?.id) localStorage.setItem(userStorageKey(user.id, 'archived_chats'), JSON.stringify(next));
       return next;
     });
   };

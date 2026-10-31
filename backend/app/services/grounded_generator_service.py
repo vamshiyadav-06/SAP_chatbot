@@ -109,8 +109,8 @@ class GroundedGeneratorService:
                         ],
                         temperature=temperature,
                         response_format={"type": "json_object"},
-                        max_tokens=950,
-                        timeout=16.0
+                        max_tokens=4096,
+                        timeout=30.0
                     )
                     if response.choices and response.choices[0].message and response.choices[0].message.content:
                         return response.choices[0].message.content.strip(), None
@@ -130,9 +130,9 @@ class GroundedGeneratorService:
                         ],
                         "temperature": temperature,
                         "response_format": {"type": "json_object"},
-                        "max_tokens": 950
+                        "max_tokens": 4096
                     }
-                    r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=18.0)
+                    r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=30.0)
                     if r.status_code == 200:
                         data = r.json()
                         choices = data.get("choices", [])

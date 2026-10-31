@@ -35,7 +35,7 @@ def test_sap_classifier_refusal():
     for q in rejected_queries:
         is_sap, msg = sap_classifier.classify(q)
         assert is_sap is False, f"Query '{q}' should be rejected"
-        assert "I can only help with SAP and SAP-related topics." in msg
+        assert "I can only assist with SAP and SAP-related topics." in msg
 
 def test_rag_endpoint_refusal():
     # Register/login user
@@ -52,5 +52,6 @@ def test_rag_endpoint_refusal():
     data = resp.json()
     assert data["source_type"] == "refusal"
     assert data["grounding_score"] == 0.0
-    assert "I can only help with SAP and SAP-related topics." in data["answer"]
-    assert len(data["citations"]) == 0
+    assert "I can only assist with SAP and SAP-related topics." in data["answer"]
+    # Regular users never receive citations (the key is stripped), and a refusal has none anyway.
+    assert not data.get("citations")

@@ -23,6 +23,10 @@ def _create_sample_png():
 
 @pytest.fixture
 def client():
+    # These tests exercise document processing, not authorization (covered by test_admin_portal_security);
+    # document management requires an administrator, so act as one.
+    from backend.app.api.documents import authenticate_document_operator
+    app.dependency_overrides[authenticate_document_operator] = lambda: SimpleNamespace(id="test-admin", is_admin=True)
     return TestClient(app)
 
 
@@ -47,6 +51,25 @@ def test_document_listing_and_counts(client):
     assert isinstance(data["documents"], list)
 
 
+def test_admin_can_classify_source_tier_and_invalidate_retrieval_cache(client):
+    from backend.app.api.documents import SourceTierUpdate, set_document_source_tier
+
+    document = SimpleNamespace(id="test-doc", source_tier="self_authored")
+    query = SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: document))
+    session = SimpleNamespace(query=lambda *_args: query, commit=lambda: None)
+    request = SimpleNamespace()
+
+    with patch("backend.app.api.documents.audit_log.record") as record, \
+            patch.object(retrieval_service, "invalidate_cache") as invalidate:
+        result = set_document_source_tier(
+            "test-doc", SourceTierUpdate(source_tier="official_sap"), request, session, "test-admin"
+        )
+
+    assert result == {"id": "test-doc", "source_tier": "official_sap"}
+    record.assert_called_once()
+    invalidate.assert_called_once()
+
+
 def test_upload_multiple_documents_and_safe_deduplication(client, db_session):
     """Test uploading multiple new files and ensuring safe registration without overwriting."""
     test_txt_bytes = b"SAP BRIM CI CIT BIT integration and billing process documentation."
@@ -67,6 +90,7 @@ def test_upload_multiple_documents_and_safe_deduplication(client, db_session):
     uploaded_docs = result["documents"]
     doc1_id = uploaded_docs[0]["id"]
     doc2_id = uploaded_docs[1]["id"]
+    assert db_session.query(Document).filter(Document.id == doc1_id).one().source_tier == "self_authored"
 
     try:
         # Verify both appear with status "pending"

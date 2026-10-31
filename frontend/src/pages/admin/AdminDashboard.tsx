@@ -23,9 +23,11 @@ import { useAuth } from '../../context/AuthContext';
 import { DocumentManagementPage } from '../DocumentManagementPage';
 import {
   apiGetRAGInspectionDocuments,
+  apiGetSystemConfig,
   apiTestSimilaritySearch,
   apiTriggerIngest,
 } from '../../services/api';
+import type { SystemConfig } from '../../services/api';
 import { PageMeta } from '../../components/ui/PageMeta';
 import iconOnly from '../../assets/clyptusap-icon.png';
 
@@ -84,6 +86,17 @@ export const AdminDashboard: React.FC = () => {
     if (activeTab === 'sources') {
       fetchSources();
     }
+  }, [activeTab]);
+
+  // System tab: live settings from the backend, never hard-coded copies.
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
+  const [systemError, setSystemError] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeTab !== 'system') return;
+    setSystemError(null);
+    apiGetSystemConfig()
+      .then(setSystemConfig)
+      .catch((err: Error) => setSystemError(err.message));
   }, [activeTab]);
 
   const handleTriggerIngest = async () => {
@@ -163,7 +176,7 @@ export const AdminDashboard: React.FC = () => {
                 </div>
                 <div className="text-[11px] font-mono text-zinc-400 truncate flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>{user?.email || 'vamshiyadav245@gmail.com'}</span>
+                  <span>{user?.email}</span>
                 </div>
               </div>
             </div>
@@ -700,28 +713,32 @@ export const AdminDashboard: React.FC = () => {
                   <span>Vector & Model Configuration</span>
                 </div>
 
-                <div className="space-y-2.5 text-xs text-zinc-300 font-mono">
-                  <div className="flex justify-between py-1.5 border-b border-zinc-800">
-                    <span className="text-zinc-500">Embedding Model:</span>
-                    <span className="text-white font-semibold">text-embedding-3-small</span>
+                {systemError ? (
+                  <p className="text-xs text-rose-300">{systemError}</p>
+                ) : !systemConfig ? (
+                  <p className="text-xs text-zinc-500">Loading configuration...</p>
+                ) : (
+                  <div className="space-y-2.5 text-xs text-zinc-300 font-mono">
+                    {[
+                      ['Embedding Model:', systemConfig.embedding_model],
+                      ['Vector Dimensions:', `${systemConfig.embedding_dim}`],
+                      ['Answer Model:', `${systemConfig.llm_model} (${systemConfig.llm_provider})`],
+                      ['Similarity Threshold:', systemConfig.similarity_threshold.toFixed(2)],
+                      ['Internal Evidence Threshold:', systemConfig.internal_evidence_threshold.toFixed(2)],
+                      ['Grounding Threshold:', systemConfig.grounding_threshold.toFixed(2)],
+                      ['Admin API Key:', systemConfig.admin_api_key_enabled ? 'Enabled' : 'Disabled'],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex justify-between gap-4 py-1.5 border-b border-zinc-800">
+                        <span className="text-zinc-500">{label}</span>
+                        <span className="text-white font-semibold text-right break-all">{value}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between gap-4 py-1.5">
+                      <span className="text-zinc-500">Signed-in Administrator:</span>
+                      <span className="text-amber-400 font-semibold text-right break-all">{systemConfig.signed_in_admin}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-zinc-800">
-                    <span className="text-zinc-500">Vector Dimensions:</span>
-                    <span className="text-white font-semibold">1536 float32</span>
-                  </div>
-                  <div className="flex justify-between py-1.5 border-b border-zinc-800">
-                    <span className="text-zinc-500">Internal Confidence Threshold:</span>
-                    <span className="text-white font-semibold">0.65</span>
-                  </div>
-                  <div className="flex justify-between py-1.5 border-b border-zinc-800">
-                    <span className="text-zinc-500">Grounding Threshold:</span>
-                    <span className="text-white font-semibold">0.70</span>
-                  </div>
-                  <div className="flex justify-between py-1.5">
-                    <span className="text-zinc-500">Primary Administrator:</span>
-                    <span className="text-amber-400 font-semibold">vamshiyadav245@gmail.com</span>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           </main>

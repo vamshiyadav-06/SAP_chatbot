@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ShieldCheck, Mail, Lock, AlertCircle, KeyRound, Sparkles, Check } from 'lucide-react';
+import { ArrowLeft, ShieldCheck, Mail, Lock, AlertCircle } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { PageMeta } from '../../components/ui/PageMeta';
 import { useAuth } from '../../context/AuthContext';
@@ -10,11 +10,12 @@ export const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [email, setEmail] = useState('vamshiyadav245@gmail.com');
-  const [password, setPassword] = useState('Vamshi@06');
-  const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get('expired') ? 'Your session has expired. Please sign in again.' : null
+  );
   const [loading, setLoading] = useState(false);
-  const [autofilled, setAutofilled] = useState(false);
 
   // If already logged in as admin, redirect to /admin
   useEffect(() => {
@@ -43,13 +44,6 @@ export const AdminLoginPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleFillCredentials = () => {
-    setEmail('vamshiyadav245@gmail.com');
-    setPassword('Vamshi@06');
-    setAutofilled(true);
-    setTimeout(() => setAutofilled(false), 2500);
   };
 
   return (
@@ -109,37 +103,6 @@ export const AdminLoginPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Quick credentials banner */}
-            <div className="mb-6 p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800 text-xs flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
-                  <KeyRound size={13} className="text-amber-400 shrink-0" />
-                  <span>Authorized Administrator</span>
-                </div>
-                <div className="text-[11px] font-mono text-zinc-400 truncate mt-0.5">
-                  vamshiyadav245@gmail.com
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleFillCredentials}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[11px] font-semibold transition shrink-0 flex items-center gap-1 cursor-pointer"
-              >
-                {autofilled ? (
-                  <>
-                    <Check size={12} className="text-emerald-400" />
-                    <span className="text-emerald-400">Filled</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={12} />
-                    <span>Autofill</span>
-                  </>
-                )}
-              </button>
-            </div>
-
             {/* Error message */}
             {error && (
               <div className="mb-5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2.5">
@@ -161,7 +124,7 @@ export const AdminLoginPage: React.FC = () => {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="vamshiyadav245@gmail.com"
+                    placeholder="admin@company.com"
                     autoComplete="username"
                     className="w-full bg-[#12151f] border border-zinc-700/80 focus:border-amber-500 text-white rounded-xl pl-10 pr-3.5 py-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 transition font-mono"
                   />

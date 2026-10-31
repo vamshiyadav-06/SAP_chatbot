@@ -18,6 +18,7 @@ from backend.app.models.chunk import DocumentChunk
 from backend.app.services.document_service import document_service
 from backend.app.services.embedding_service import embedding_service
 from backend.app.services.retrieval_service import retrieval_service
+from backend.app.security.log_safety import privacy_fingerprint
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ingestion")
@@ -38,7 +39,7 @@ def discover_knowledge_base_files() -> List[Path]:
         logger.warning("Canonical knowledge-base directory does not exist: %s", source_dir)
         return []
 
-    logger.info("Scanning canonical knowledge-base directory recursively: %s", source_dir)
+    logger.info("Scanning the canonical knowledge-base directory recursively.")
     file_list = sorted(
         (path for path in source_dir.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS),
         key=lambda path: (path.name.lower(), str(path).lower()),
@@ -76,14 +77,20 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
 
     for doc_path in doc_files:
         filename = doc_path.name
+        file_ref = privacy_fingerprint(filename)
         file_hash = document_service.compute_file_hash(doc_path)
 
         # Idempotency check: check if document already exists with same hash and valid chunks
         existing_doc = db.query(Document).filter(Document.filename == filename).first()
         if existing_doc and existing_doc.file_hash == file_hash:
-            chunk_count = db.query(DocumentChunk).filter(DocumentChunk.document_id == existing_doc.id).count()
-            if chunk_count > 0:
-                logger.info(f"Skipping '{filename}': already ingested with identical checksum ({chunk_count} chunks).")
+            chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == existing_doc.id)
+            chunk_count = chunks.count()
+            compatible_count = chunks.filter(
+                DocumentChunk.embedding_model == embedding_service.embedding_model,
+                DocumentChunk.embedding_version == embedding_service.embedding_version,
+            ).count()
+            if chunk_count > 0 and compatible_count == chunk_count:
+                logger.info("Skipping document_ref=%s: unchanged (%d chunks).", file_ref, chunk_count)
                 results.append({
                     "filename": filename,
                     "status": "skipped",
@@ -91,14 +98,16 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
                     "chunks": chunk_count
                 })
                 continue
+            if chunk_count:
+                logger.info("Re-embedding document_ref=%s: stored embeddings do not match configured provenance.", file_ref)
 
-        logger.info(f"Processing document: '{filename}' ({doc_path.stat().st_size / (1024 * 1024):.2f} MB) ...")
+        logger.info("Processing document_ref=%s size_mb=%.2f.", file_ref, doc_path.stat().st_size / (1024 * 1024))
         pages = document_service.extract_document_pages(doc_path)
         page_count = len(pages)
 
         # If document already exists with different hash, purge old chunks safely
         if existing_doc:
-            logger.info(f"Updating existing document '{filename}' (reindexing new contents).")
+            logger.info("Updating document_ref=%s (reindexing changed contents).", file_ref)
             db.query(DocumentChunk).filter(DocumentChunk.document_id == existing_doc.id).delete()
             existing_doc.file_hash = file_hash
             existing_doc.page_count = page_count
@@ -134,7 +143,7 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
             all_chunk_dicts.extend(chunks)
 
         total_chunks = len(all_chunk_dicts)
-        logger.info(f"Generated {total_chunks} structure-aware chunks for '{filename}'. Generating embeddings in batches...")
+        logger.info("Generated %d structure-aware chunks for document_ref=%s; generating embeddings.", total_chunks, file_ref)
 
         # Process embeddings and database insertion in streaming batches
         inserted_chunks = 0
@@ -155,16 +164,18 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
                     section=chunk_data["section"],
                     chunk_text=chunk_data["chunk_text"],
                     metadata_json=json.dumps(meta),
-                    embedding=embeddings[j]
+                    embedding=embeddings[j],
+                    embedding_model=embedding_service.embedding_model,
+                    embedding_version=embedding_service.embedding_version,
                 )
                 db.add(chunk_record)
                 inserted_chunks += 1
 
             db.commit()
             if total_chunks > 100:
-                logger.info(f"Progress '{filename}': {inserted_chunks}/{total_chunks} chunks embedded and saved.")
+                logger.info("Progress document_ref=%s: %d/%d chunks embedded.", file_ref, inserted_chunks, total_chunks)
 
-        logger.info(f"Successfully ingested '{filename}': {page_count} pages, {inserted_chunks} chunks.")
+        logger.info("Successfully ingested document_ref=%s pages=%d chunks=%d.", file_ref, page_count, inserted_chunks)
         results.append({
             "filename": filename,
             "status": "ingested",

@@ -21,6 +21,7 @@ from backend.app.services.web_search_service import web_search_service
 from backend.app.services.evidence_selection_service import evidence_selection_service
 from backend.app.retrieval.repo_store import repo_store
 from backend.app.retrieval.brim_relevance_gate import brim_relevance_gate
+from backend.app.retrieval.source_registry import hostname_matches
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,22 @@ AUTHORITY_WEIGHTS = {
     "official_help_doc": 0.85,       # help.sap.com
     "github_repo": 0.80,
     "official_web": 0.80,            # help.sap.com / official web
+    "official_sap_domain": 0.80,
     "sap_community": 0.50,           # community.sap.com
     "forum_web": 0.50,               # community.sap.com / blogs
     "self_authored": 0.60,
     "unknown": 0.50
+}
+
+# Web sources classified by hostname (web_search_service.classify_authority).
+# Official documentation and SAP Notes/KBAs outrank community and other pages.
+WEB_AUTHORITY_CLASS_WEIGHTS = {
+    "official_sap_help": AUTHORITY_WEIGHTS["official_help_doc"],
+    "sap_support_note": AUTHORITY_WEIGHTS["official_help_doc"],
+    "sap_learning": AUTHORITY_WEIGHTS["official_web"],
+    "official_sap_other": 0.70,
+    "sap_community": AUTHORITY_WEIGHTS["sap_community"],
+    "third_party": 0.40,
 }
 
 
@@ -46,12 +59,11 @@ class MultiSourceComparator:
     def get_source_authority_weight(self, provenance_tier: str, domain: Optional[str] = None) -> float:
         """Determines configured authority weight based on provenance and domain."""
         if domain:
-            dom_lower = domain.lower()
-            if "developers.sap.com" in dom_lower:
+            if hostname_matches(domain, "developers.sap.com"):
                 return AUTHORITY_WEIGHTS.get("official_developer_doc", 0.85)
-            elif "help.sap.com" in dom_lower:
+            elif hostname_matches(domain, "help.sap.com"):
                 return AUTHORITY_WEIGHTS.get("official_help_doc", 0.85)
-            elif any(d in dom_lower for d in ["community.sap.com", "blogs.sap.com"]):
+            elif any(hostname_matches(domain, d) for d in ["community.sap.com", "blogs.sap.com"]):
                 return AUTHORITY_WEIGHTS.get("sap_community", 0.50)
         return AUTHORITY_WEIGHTS.get(provenance_tier, 0.70)
 
@@ -80,7 +92,7 @@ class MultiSourceComparator:
                 # Infer from document name
                 from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
                 doc_name = raw_candidate.get("document_name", "")
-                prov_tier = DOCUMENT_TIER_MAPPING.get(doc_name, {}).get("tier", "official_sap")
+                prov_tier = DOCUMENT_TIER_MAPPING.get(doc_name, {}).get("tier", "self_authored")
             lic_status = "approved"
             gate_status = "passed"
             authority_weight = self.get_source_authority_weight(prov_tier)
@@ -120,10 +132,14 @@ class MultiSourceComparator:
 
         elif source_type == "web":
             domain = raw_candidate.get("domain", "")
-            prov_tier = "official_web" if "help.sap.com" in domain else "forum_web"
+            authority_class = raw_candidate.get("authority_class")
+            prov_tier = "official_web" if (
+                hostname_matches(domain or raw_candidate.get("url", ""), "help.sap.com")
+                or authority_class in ("official_sap_help", "sap_support_note")
+            ) else "forum_web"
             lic_status = "approved"
             gate_status = "passed"
-            authority_weight = self.get_source_authority_weight(prov_tier, domain=domain)
+            authority_weight = WEB_AUTHORITY_CLASS_WEIGHTS.get(authority_class) or self.get_source_authority_weight(prov_tier, domain=domain)
             citation_meta = {
                 "document": raw_candidate.get("title", "SAP Web Documentation"),
                 "page": 1,
@@ -139,6 +155,10 @@ class MultiSourceComparator:
                 "url": raw_candidate.get("url", ""),
                 "domain": domain,
                 "snippet": citation_meta["snippet"],
+                "authority_class": authority_class,
+                "release": raw_candidate.get("release"),
+                "published_date": raw_candidate.get("published_date"),
+                "content_extracted": bool(raw_candidate.get("content_extracted")),
             }
 
         else:
@@ -283,6 +303,17 @@ class MultiSourceComparator:
             if len(top_sources) > 1 and abs(eligible_candidates[0]["final_score"] - eligible_candidates[1]["final_score"]) < 0.05:
                 conflicts_detected = True
 
+        # Content-level conflicts between internal and external evidence: an identifier
+        # documented for use in one source but declared unavailable in another.
+        try:
+            from backend.app.services.sap_identifier_validator import sap_identifier_validator
+            evidence_conflicts = sap_identifier_validator.detect_evidence_conflicts(eligible_candidates[:8])
+        except Exception as exc:
+            logger.warning(f"Evidence conflict detection skipped: {exc}")
+            evidence_conflicts = []
+        if evidence_conflicts:
+            conflicts_detected = True
+
         comparison_object = {
             "query_id": query_id,
             "sources_compared": sources_compared,
@@ -295,7 +326,8 @@ class MultiSourceComparator:
             "selection_reason": selection_reason,
             "rejected_candidates": rejected_candidates[:5],
             "evidence_gaps": ["No official SAP match"] if winning_source == "insufficient" else [],
-            "conflicts_detected": conflicts_detected
+            "conflicts_detected": conflicts_detected,
+            "evidence_conflicts": evidence_conflicts,
         }
 
         return {
