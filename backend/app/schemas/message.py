@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from backend.app.schemas.citation import CitationResponse, WebSourceResponse, WebImageResponse
+from backend.app.config import settings
 
 
 class DocumentAttachment(BaseModel):
@@ -48,6 +49,14 @@ class MessageCreate(BaseModel):
     mode: Literal["sprint", "scholar"] = "scholar"
     is_regeneration: Optional[bool] = False
 
+    @field_validator("content")
+    @classmethod
+    def enforce_configured_message_limit(cls, value: str) -> str:
+        limit = int(getattr(settings, "MAX_MESSAGE_CHARS", 12000))
+        if len(value) > limit:
+            raise ValueError(f"Message is too long. The maximum length is {limit} characters.")
+        return value
+
 
 class SavePartialRequest(BaseModel):
     """Text the user saw before stopping a stream, with the stream id the server issued for it (F-37)."""
@@ -64,6 +73,8 @@ class TokenUsage(BaseModel):
     used: int
     baseline: int
     saved: int
+    # Free tokens this answer cost the user (0 to 1), see services/token_wallet.py.
+    cost: float = 0.0
 
 
 class TokenSavingsSummary(BaseModel):
@@ -79,7 +90,8 @@ def stored_token_usage(message) -> Optional[TokenUsage]:
     used, baseline = getattr(message, "tokens_used", None), getattr(message, "tokens_baseline", None)
     if used is None or baseline is None:
         return None
-    return TokenUsage(used=used, baseline=baseline, saved=max(0, baseline - used))
+    from backend.app.services import token_wallet  # local: the wallet imports the models
+    return TokenUsage(used=used, baseline=baseline, saved=max(0, baseline - used), cost=token_wallet.cost_tokens(used))
 
 
 class MessageResponse(BaseModel):

@@ -21,7 +21,9 @@ class TavilySearchProvider:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key if api_key is not None else settings.WEB_SEARCH_API_KEY
         self._client = None
-        if self.api_key:
+        # An explicit sentinel makes offline test/staging environments fail closed even when .env
+        # values would otherwise be inherited. Empty env values can be ignored by BaseSettings.
+        if self.api_key and self.api_key.strip().lower() not in {"disabled", "none", "off"}:
             try:
                 from tavily import TavilyClient
                 self._client = TavilyClient(api_key=self.api_key)

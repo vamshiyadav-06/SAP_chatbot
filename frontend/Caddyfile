@@ -4,8 +4,12 @@
 # - /api/* and /health go to the backend container; streamed answers (Server-Sent Events) are flushed
 #   immediately. The backend trusts this proxy's X-Forwarded-For / X-Forwarded-Proto (TRUSTED_PROXIES).
 # - Everything else is the React app; client-side routes fall back to index.html.
+# - ACCESS_MODE selects an access snippet from caddy/access/: "open" (production) or "basic_auth"
+#   (staging gate). An unknown value fails at start instead of silently opening the site.
 
 {$APP_DOMAIN:localhost} {
+	import /etc/caddy/access/{$ACCESS_MODE:open}.caddy
+
 	handle /api/* {
 		reverse_proxy backend:8000 {
 			flush_interval -1

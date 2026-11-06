@@ -390,9 +390,10 @@ class AnswerStyleRouter:
 
 FORMATTING_RULES = """FORMATTING RULES:
 - Answer the user's actual question in the first sentence or two. No introduction that restates the question.
-- Prefer short paragraphs for explanations, bullets for short collections of related items, and numbered lists for ordered procedures.
+- Structure every answer that is longer than a few sentences: a bolded one-sentence answer first, then short sections each under its own "## " Markdown heading, with bullets for related items, numbered lists for ordered procedures, and **bold** for key terms, identifiers and T-codes. Keep paragraphs to three sentences or fewer; never return one unbroken block of text.
+- Never write HTML tags such as <br> in an answer. In a table cell keep one short phrase; put longer lists in bullets below the table.
 - Do not default to Markdown tables. Use a table only for a real comparison or genuinely tabular data, with short cells (no paragraphs inside cells).
-- Use headings only when they help navigation. Never repeat a heading's content in another section.
+- Give each heading a short, specific title. Never repeat a heading's content in another section.
 - State each fact once. Do not add a summary or conclusion that repeats what was already said, and no closing "Key points", "Summary" or "Overview" section that restates earlier content.
 - Keep important technical details, identifiers and source terminology; never drop critical evidence just to be shorter.
 - Formatting never relaxes the evidence rules: cite with [E#] markers exactly as instructed, and do not invent facts, references, URLs or citations.
@@ -405,9 +406,9 @@ _LAYOUTS = {
         "No headings, no table, no closing summary."
     ),
     "technical_explanation": (
-        "Open with a one- or two-sentence direct answer. Then explain how it works: the key components or workflow "
-        "and the relevant technical details, in short paragraphs or bullets. Mention limitations or caveats only "
-        "where the evidence states them."
+        "Open with a bolded one- or two-sentence direct answer. Then use \"## \" sections such as the key components, "
+        "how it works (a numbered list when it is a flow) and the relevant technical details, each as short bullets or "
+        "paragraphs. Add a final \"## Limitations\" section only where the evidence states caveats."
     ),
     "comparison": (
         "Start with one or two sentences naming the main distinction. Then, if it genuinely helps, one comparison "
@@ -488,7 +489,10 @@ def render_style_instructions(plan: AnswerPlan) -> str:
     if plan.max_sections == 0:
         lines.append("Do not use headings.")
     else:
-        lines.append(f"Use at most {plan.max_sections} headings, and only if the answer has distinct parts.")
+        lines.append(
+            f"Use \"## \" Markdown headings to separate the distinct parts, at most {plan.max_sections}; "
+            "a very short answer may use none."
+        )
 
     if plan.detail_level == "concise":
         lines.append("Keep it concise, clear, and direct with an example when useful (typically 100-250 words).")

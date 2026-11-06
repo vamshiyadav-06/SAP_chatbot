@@ -1,3 +1,11 @@
+## 2026-11-05 - Staging controls, secure refresh, AI stream reliability, regression coverage
+
+* Closed public individual registration by default in backend configuration and the frontend build; the API remains authoritative. Staging uses Basic auth on every route except `/health`, a loopback web bind, separate Compose project/volumes, and a staging preflight.
+* Added `.env.staging.example`, safe secret initialization, isolated staging deploy/public-bind/load/recovery scripts, `docs/STAGING_DEPLOYMENT.md`, a local fake-provider E2E Compose overlay, and Playwright browser specs. Deployment and recovery scripts do not delete volumes or DBs.
+* Frontend refreshes once through the rotating HttpOnly cookie endpoint after an authenticated 401, deduplicates concurrent refreshes, and preserves cached login state across temporary network/5xx startup failures.
+* LLM paths now share request deadlines and SDK timeout caps; stream errors after partial output stop without provider-switch concatenation; truncation continuation stays on the originating model; cancelled SDK streams are closed; provider error logs omit response bodies; messages, history, attachment text, and provider prompts observe configured limits.
+* Evidence: focused backend AI/deployment suite 71 passed; refresh-token suite 30 passed; broader auth/RAG/query selection 110 passed; conversation-memory suite 19 passed; provider fallback module with explicit disabled sentinel 9 passed; frontend 39 files / 249 passed; `tsc -b && vite build` passed; Playwright listed 3 tests. A first broad run had invalid provider isolation because empty environment values did not override `.env` (whether any request was billable is unknown). A later safe non-live backend run passed 112 tests / deselected 7, then stopped on a local PostgreSQL fixture setup error. No full backend count is claimed. Docker Engine was unavailable, so Docker image build, fresh Compose DB creation, browser run, load, and recovery remain unverified. No live server, push, or data deletion occurred.
+
 ## 2026-11-04 - Deployment readiness: production Docker stack, env templates, same-origin API
 
 * Owner request: "make the project deployment ready, make the instructions clear, write correct .env example files, then push to main" (vamshiyadav-06/SAP_chatbot).

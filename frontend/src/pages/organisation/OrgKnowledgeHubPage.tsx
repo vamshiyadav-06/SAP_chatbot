@@ -33,6 +33,7 @@ export const OrgKnowledgeHubPage: React.FC = () => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [likeBusyIds, setLikeBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const [openId, setOpenId] = useState<string | null>(null);
+  const [openSection, setOpenSection] = useState<'comments' | undefined>(undefined);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const currentKey = listKeyOf(category, query);
@@ -176,7 +177,10 @@ export const OrgKnowledgeHubPage: React.FC = () => {
         total={current?.total ?? 0}
         error={current?.error ?? null}
         onRetry={() => setReloadCount((n) => n + 1)}
-        onOpen={setOpenId}
+        onOpen={(id, section) => {
+          setOpenSection(section);
+          setOpenId(id);
+        }}
         onToggleLike={toggleLike}
         likeBusyIds={likeBusyIds}
         onLoadMore={loadMore}
@@ -186,6 +190,7 @@ export const OrgKnowledgeHubPage: React.FC = () => {
         <KnowledgeAnswerDrawer
           key={openId}
           answerId={openId}
+          section={openSection}
           categories={categories}
           onClose={closeDrawer}
           onSummaryChange={handleSummaryChange}

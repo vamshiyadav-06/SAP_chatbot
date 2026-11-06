@@ -553,8 +553,9 @@ class ConversationMemoryService:
             role_label = "User Statement" if m["role"] == "user" else "Assistant Response"
             chat_info = f"Chat: {m.get('chat_title', 'Conversation')}"
             ts = m["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(m["created_at"], datetime) else str(m["created_at"])
+            content = str(m.get("content") or "")[:2000]
             blocks.append(
-                f"[M{i}] {role_label} ({chat_info} | Sent: {ts} | ID: {m.get('message_id', m.get('id', 'N/A'))}):\n{m['content']}"
+                f"[M{i}] {role_label} ({chat_info} | Sent: {ts} | ID: {m.get('message_id', m.get('id', 'N/A'))}):\n{content}"
             )
 
         return "\n\n".join(blocks)

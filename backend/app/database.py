@@ -54,6 +54,8 @@ def create_db_engine(url: str = None):
         pool_size=settings.DATABASE_POOL_SIZE,
         max_overflow=settings.DATABASE_MAX_OVERFLOW,
         pool_recycle=1800,
+        # SQL errors and engine logs never carry bound values (password hashes, e-mails, chat text).
+        hide_parameters=True,
         connect_args={
             "connect_timeout": settings.DATABASE_CONNECT_TIMEOUT,
             # Naive DateTime columns hold UTC, matching the values written by the app.
@@ -185,7 +187,8 @@ def init_db():
 
 def seed_super_admin():
     """Create the super admin named in .env. An existing account keeps its password."""
-    admin_email = settings.SUPER_ADMIN_EMAIL.strip()
+    # Login looks accounts up by the lower-cased address, so a mixed-case one could never sign in.
+    admin_email = settings.SUPER_ADMIN_EMAIL.strip().lower()
     if not admin_email:
         logger.info("SUPER_ADMIN_EMAIL not set; no super admin account seeded.")
         return

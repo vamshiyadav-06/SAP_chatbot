@@ -4,12 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { signOutPathFor } from '../layouts/accountRouting';
 import { TokenSavingsCard, type TokenSavingsState } from '../components/chat/TokenSavingsCard';
+import { SavedMemoryCard } from '../components/chat/SavedMemoryCard';
+import { LanguageCard } from '../components/chat/LanguageCard';
 import { apiGetTokenSavings } from '../services/api';
 
 type Appearance = 'light' | 'dark' | 'system';
 
 export const SettingsPage: React.FC = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, setPreferredLanguage } = useAuth();
   const navigate = useNavigate();
   const [savings, setSavings] = useState<TokenSavingsState>({ status: 'loading' });
 
@@ -82,7 +84,11 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
+      <LanguageCard value={user?.preferred_language ?? 'en'} onChanged={setPreferredLanguage} />
+
       <TokenSavingsCard state={savings} />
+
+      <SavedMemoryCard />
 
       <div className="settings-group">
         <div className="settings-group-heading">

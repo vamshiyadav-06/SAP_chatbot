@@ -1,5 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { markHtmlBreaks, remarkHtmlBreaks } from './htmlBreaks';
+import { repairCollapsedMarkdown } from './repairMarkdown';
 
 /**
  * Renders an answer's Markdown the way the chat does: images suppressed (F-10), only http(s)/mailto
@@ -9,7 +11,7 @@ import remarkGfm from 'remark-gfm';
 export function AnswerMarkdown({ content }: { content: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkHtmlBreaks]}
       components={{
         img: () => null,
         a: ({ href, children }) => {
@@ -46,7 +48,7 @@ export function AnswerMarkdown({ content }: { content: string }) {
         },
       }}
     >
-      {content}
+      {markHtmlBreaks(repairCollapsedMarkdown(content))}
     </ReactMarkdown>
   );
 }

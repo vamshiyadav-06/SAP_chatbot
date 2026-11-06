@@ -20,19 +20,19 @@ export interface Suggestion {
 export const MODES: { id: ChatMode; title: string; summary: string; detail: string }[] = [
   {
     id: 'sprint',
-    title: 'Sprint',
+    title: 'Low',
     summary: 'Fast, direct answers',
     detail: 'Answers straight away from the language model. Best for definitions and quick how-tos.',
   },
   {
     id: 'scholar',
-    title: 'Scholar',
+    title: 'High',
     summary: 'Researched and verified',
     detail: 'Searches curated SAP documentation and checks each claim before answering. Takes longer.',
   },
 ];
 
-// Quick, conceptual questions suit Sprint; multi-step and configuration questions suit Scholar.
+// Quick, conceptual questions suit Low; multi-step and configuration questions suit High.
 export const SUGGESTIONS: Record<ChatMode, Suggestion[]> = {
   sprint: [
     {

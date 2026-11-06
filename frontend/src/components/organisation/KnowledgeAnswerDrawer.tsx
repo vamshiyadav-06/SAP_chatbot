@@ -21,12 +21,15 @@ const message = (err: unknown, fallback: string) => (err instanceof Error ? err.
 /** Full shared answer with likes, comments and (for the sharer or an admin) topic change and removal. */
 export function KnowledgeAnswerDrawer({
   answerId,
+  section,
   categories,
   onClose,
   onSummaryChange,
   onDeleted,
 }: {
   answerId: string;
+  /** `comments`: opened from the comment button, so go straight to the discussion. */
+  section?: 'comments';
   categories: KnowledgeCategory[];
   onClose: () => void;
   onSummaryChange: (id: string, patch: Partial<SharedAnswerSummary>, categoryChanged?: boolean) => void;
@@ -45,6 +48,16 @@ export function KnowledgeAnswerDrawer({
   const [commentBusy, setCommentBusy] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [pendingBusy, setPendingBusy] = useState(false);
+  const discussionRef = useRef<HTMLElement>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // From the comment button: once the answer has loaded, show the discussion and focus the comment box.
+  const loaded = detail !== null;
+  useEffect(() => {
+    if (section !== 'comments' || !loaded) return;
+    discussionRef.current?.scrollIntoView({ block: 'start' });
+    commentInputRef.current?.focus({ preventScroll: true });
+  }, [section, loaded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -214,7 +227,7 @@ export function KnowledgeAnswerDrawer({
                 </section>
               )}
 
-              <section aria-label="Discussion">
+              <section aria-label="Discussion" ref={discussionRef}>
                 <h3 className="org-section-title">Discussion · {pluralise(detail.comments.length, 'comment')}</h3>
                 {detail.comments.length > 0 ? (
                   <ul className="org-comments">
@@ -251,6 +264,7 @@ export function KnowledgeAnswerDrawer({
                     Add a comment
                   </label>
                   <textarea
+                    ref={commentInputRef}
                     id="org-comment-input"
                     className="org-textarea"
                     rows={3}

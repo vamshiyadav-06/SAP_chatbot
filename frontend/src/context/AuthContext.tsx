@@ -25,6 +25,23 @@ import {
 import { clearAllUserStorage, clearLegacyUserStorage, clearUserStorage, userStorageKey } from '../services/userStorage';
 import { signInPathFor } from '../layouts/accountRouting';
 
+const cachedProfileForToken = (accessToken: string): User | null => {
+  try {
+    const payload = accessToken.split('.')[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const claims = JSON.parse(window.atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')));
+    if (typeof claims.sub !== 'string' || !claims.sub) return null;
+    const cached = localStorage.getItem(userStorageKey(claims.sub, 'profile'));
+    if (!cached) return null;
+    const profile = JSON.parse(cached) as User;
+    return profile.id === claims.sub ? { ...profile, profileCompleted: true } : null;
+  } catch {
+    // The cached profile is only a temporary display fallback while the server is unreachable.
+    return null;
+  }
+};
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
@@ -37,6 +54,8 @@ interface AuthContextType {
   applySession: (session: AuthTokenResponse) => User;
   register: (name: string, email: string, password: string) => Promise<void>;
   updateProfile: (updates: { name: string; dateOfBirth?: string; avatar?: string }) => void;
+  /** Remembers the answer language the server accepted. */
+  setPreferredLanguage: (code: string) => void;
   logout: () => void;
 }
 
@@ -84,7 +103,7 @@ export const AuthProvider: React.FC<{
             } catch {}
           }
           saveUser({ ...userData, profileCompleted: true, ...extra });
-          setToken(stored);
+          setToken(getStoredToken() ?? stored);
         } catch (error) {
           console.error('Authentication initialization failed:', error);
           const status = error instanceof ApiError ? error.status : undefined;
@@ -97,11 +116,15 @@ export const AuthProvider: React.FC<{
             setToken(null);
             setUser(null);
           } else {
-            clearStoredToken();
-            clearAllUserStorage();
-            userIdRef.current = null;
-            setToken(null);
-            setUser(null);
+            // A network failure or 5xx does not prove the session is invalid. Preserve the refresh
+            // cookie and local session so the next authenticated request can retry after recovery.
+            const cachedProfile = cachedProfileForToken(stored);
+            if (cachedProfile) {
+              userIdRef.current = cachedProfile.id;
+              accountTypeRef.current = cachedProfile.account_type ?? null;
+              setUser(cachedProfile);
+            }
+            setToken(stored);
           }
         }
       } else {
@@ -200,13 +223,21 @@ export const AuthProvider: React.FC<{
     await apiRegister(name, email, password);
   };
 
+  const setPreferredLanguage = (code: string) => {
+    if (user) saveUser({ ...user, preferred_language: code });
+  };
+
   const updateProfile = (updates: { name: string; dateOfBirth?: string; avatar?: string }) => {
     if (!user) return;
     saveUser({ ...user, ...updates, profileCompleted: true });
   };
 
   const logout = (): void => {
-    void apiLogout().catch(() => undefined);
+    const tokenBeforeLogout = getStoredToken();
+    void apiLogout().catch(() => undefined).finally(() => {
+      // A refresh can finish just as the user logs out. Do not leave that replacement access token behind.
+      if (getStoredToken() !== tokenBeforeLogout) clearStoredToken();
+    });
     clearStoredToken();
     clearCurrentUserStorage();
     setToken(null);
@@ -225,6 +256,7 @@ export const AuthProvider: React.FC<{
         applySession,
         register,
         updateProfile,
+        setPreferredLanguage,
         logout,
       }}
 

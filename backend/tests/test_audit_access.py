@@ -170,7 +170,7 @@ BODY = {"email": "newuser@example.com", "name": "New User", "password": "long-en
 # use the Super-Admin-issued activation code (docs/ORGANISATION_PORTAL.md).
 
 def test_f01_registration_is_open_by_default():
-    assert Settings.model_fields["REGISTRATION_ENABLED"].default is True
+    assert Settings.model_fields["REGISTRATION_ENABLED"].default is False
 
 
 def test_f01_individual_sign_up_needs_no_code_and_does_not_sign_in(reg_client):

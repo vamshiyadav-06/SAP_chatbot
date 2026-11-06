@@ -1,7 +1,6 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
-from backend.app.schemas.message import MessageResponse
 
 class ChatCreate(BaseModel):
     title: Optional[str] = Field(default="New SAP Chat", max_length=255)
@@ -12,13 +11,14 @@ class ChatUpdate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
 
 class ChatResponse(BaseModel):
+    """Chat metadata only. Messages are served by GET /chats/{id}/messages, which hides provider/model,
+    grounding, sources and evidence markers from regular users; embedding them here bypassed that."""
     id: str
     user_id: str
     title: str
     project_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    messages: List[MessageResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
 

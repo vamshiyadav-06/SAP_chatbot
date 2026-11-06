@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiCreateChat, apiGetChats, apiStreamMessage, setUnauthorizedHandler, streamSSE, type StreamCallbacks } from './api';
+import { ApiError, apiCreateChat, apiGetChats, apiGetMe, apiStreamMessage, getStoredToken, setUnauthorizedHandler, streamSSE, type StreamCallbacks } from './api';
 
 const sse = (...events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
+const expiredSessionFetch = () => vi.fn()
+  .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+  .mockResolvedValueOnce(new Response('{}', { status: 401 }));
 
 /** A response whose body delivers `chunks` and then closes. */
 const streamResponse = (chunks: string[], status = 200) => {
@@ -195,7 +198,7 @@ describe('streamSSE', () => {
 
 describe('apiCreateChat', () => {
   it('throws a session-expired ApiError on HTTP 401', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    vi.stubGlobal('fetch', expiredSessionFetch());
 
     const err = await apiCreateChat('q').catch((e) => e);
 
@@ -215,7 +218,7 @@ describe('expired sessions', () => {
   afterEach(() => setUnauthorizedHandler(null));
 
   it('a 401 on an authenticated request calls the global handler once per request', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    vi.stubGlobal('fetch', expiredSessionFetch());
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -234,12 +237,64 @@ describe('expired sessions', () => {
   });
 
   it('a 401 on the answer stream reports the expired session too', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    vi.stubGlobal('fetch', expiredSessionFetch());
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
     const { callbacks } = recorder();
 
     await streamSSE('/x', {}, callbacks);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes an expired access token with the HttpOnly cookie and retries once', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'rotated-token', user: { id: 'u1' } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'u1', email: 'u@example.com', name: 'User' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = await apiGetMe();
+
+    expect(user.id).toBe('u1');
+    expect(getStoredToken()).toBe('rotated-token');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const refreshInit = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(refreshInit.method).toBe('POST');
+    expect(refreshInit.credentials).toBe('include');
+    expect(new Headers(refreshInit.headers).get('X-Refresh-Request')).toBe('1');
+    const retryInit = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(new Headers(retryInit.headers).get('Authorization')).toBe('Bearer rotated-token');
+  });
+
+  it('reports an invalid refresh session as unauthorized', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 401 })));
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+
+    await expect(apiGetMe()).rejects.toMatchObject({ status: 401 });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the access token when the refresh server is temporarily unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch')));
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+
+    await expect(apiGetMe()).rejects.toThrow();
+    expect(getStoredToken()).toBe('test-token');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not clear the token when the refresh endpoint returns a server error', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 503 })));
+
+    await expect(apiGetMe()).rejects.toMatchObject({ status: 503 });
+    expect(getStoredToken()).toBe('test-token');
   });
 });

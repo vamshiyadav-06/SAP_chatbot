@@ -18,13 +18,15 @@ Privacy and error handling follow-up: browser-local profile/project/pin/archive 
 
 Embedding provenance follow-up (Phase 4, F-07): configured model/version metadata is stored with document and message vectors. The synthetic hash fallback was removed; incompatible vectors are excluded from dense scoring until an owner-approved reindex, while lexical/identifier retrieval remains available. See `HUMAN_ACTIONS.md` before deployment.
 
-Last reviewed: 2026-10-29
+Last reviewed: 2026-11-05
 
-Security updates 2026-10-28: guest/demo identity was disabled; public registration cannot assign roles; access tokens are 15 minutes and include a per-account revocation version checked against the current DB user; `/api/auth/logout` increments that version. Direct RAG output now removes citation and internal scoring/comparison fields for non-admins. Document extraction requires a signed-in user. Review `NEXT_SESSION.md` for incomplete remediation and deployment assumptions.
+Security updates 2026-11-05: guest/demo identity was disabled; public registration defaults off in backend and frontend builds; staging gates every route except `/health` behind Caddy Basic auth and binds to loopback until explicitly opened. Access and rotating refresh tokens are server-backed; frontend refresh is deduplicated and temporary backend/network failures retain the cached session. Direct RAG output removes citation and internal scoring/comparison fields for non-admins. Document extraction requires a signed-in user. Review `NEXT_SESSION.md` for incomplete remediation and deployment assumptions.
 
 Setup documentation: `SETUP.md` (repository root) is the single setup, deployment and troubleshooting guide; `README.md` describes the application, architecture and API; `docker.md` covers database access and backups. `docker-setup/README.md` only points to `SETUP.md`. None of them contain real credentials.
 
 Configuration (2026-11-02): the project has one settings file, the repository-root `.env` (template `.env.example`). Docker Compose reads it for `docker-compose.yml` substitution and `backend/app/config.py` reads it for the backend. `backend/.env` and `backend/.env.example` no longer exist and are not read.
+
+Deployment readiness follow-up (2026-11-05): staging templates/scripts and an isolated local fake-provider E2E stack are in `docs/STAGING_DEPLOYMENT.md`; Docker-dependent rollout, fresh-volume creation, browser, load, and recovery evidence remains pending when Docker Engine is unavailable. See the readiness audit for actual test counts and blockers.
 
 ## Purpose and architecture
 

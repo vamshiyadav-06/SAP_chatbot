@@ -18,7 +18,7 @@ const answer = (overrides: Partial<Message> = {}): Message => ({
   citations: [],
   web_sources: [],
   regeneration_count: 1,
-  token_usage: { used: 400, baseline: 1600, saved: 1200 },
+  token_usage: { used: 400, baseline: 1600, saved: 1200, cost: 0.07 },
   ...overrides,
 });
 
@@ -46,14 +46,14 @@ describe('answer header', () => {
     expect(badge).not.toContain('rounded');
   });
 
-  it('keeps the saved-tokens badge level with the first line when the badges wrap', () => {
+  it('keeps the tokens-used badge level with the first line when the badges wrap', () => {
     const html = render(answer());
     // Row: top-aligned, so a second line of badges does not pull the right-hand badge down.
     expect(classBefore(html, '>Clyptus.AI</span>', 'div', 1)).toContain('items-start');
     expect(classBefore(html, '>Clyptus.AI</span>', 'div', 1)).not.toContain('items-center');
     // The name and the saved badge both sit in a 24px first line, centred the same way.
     expect(classBefore(html, '>Clyptus.AI</span>', 'span')).toContain('leading-6');
-    expect(html).toMatch(/<div class="flex h-6 shrink-0 items-center"><span title="[^"]*" aria-label="Saved/);
+    expect(html).toMatch(/<div class="flex h-6 shrink-0 items-center"><span title="[^"]*" aria-label="You used only/);
   });
 
   it('gives the admin grounding badge the same text size as the other badges', () => {

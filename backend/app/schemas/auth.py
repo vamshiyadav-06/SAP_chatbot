@@ -52,6 +52,10 @@ class UserResponse(BaseModel):
     org_role: Optional[str] = None
     is_active: bool = True
     must_change_password: bool = False
+    # Free tokens left (individual accounts); see services/token_wallet.py.
+    token_balance: float = 0.0
+    token_refill_at: Optional[datetime] = None
+    preferred_language: str = "en"
 
     model_config = ConfigDict(from_attributes=True)
 

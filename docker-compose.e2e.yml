@@ -1,0 +1,28 @@
+# Isolated browser-test stack. Always use its own Compose project and database volume.
+# The provider is a local fake; no E2E request can reach a chargeable AI service.
+services:
+  stub-llm:
+    image: python:3.12.16-slim-bookworm
+    command: ["python", "/stub/server.py", "--host", "0.0.0.0", "--port", "9100"]
+    volumes:
+      - ./e2e/stub_llm:/stub:ro
+    expose:
+      - "9100"
+    restart: unless-stopped
+
+  backend:
+    environment:
+      LLM_ALLOWED_PROVIDERS: openrouter
+      OPENROUTER_BASE_URL: http://stub-llm:9100/v1
+      OPENROUTER_API_KEY: e2e-stub-key
+      GROQ_API_KEY: ""
+      GEMINI_API_KEY: ""
+      LLM_API_KEY: ""
+      WEB_FALLBACK_ENABLED: "False"
+      SAP_WEB_SOURCES_ENABLED: "False"
+      MULTI_SOURCE_COMPARE_ENABLED: "False"
+      REPO_SOURCE_ENABLED: "False"
+    depends_on:
+      - stub-llm
+
+

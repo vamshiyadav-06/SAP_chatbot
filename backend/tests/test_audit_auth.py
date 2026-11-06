@@ -34,6 +34,7 @@ class FakeSession:
     def __init__(self, users):
         self.users = {**{u.email: u for u in users}, **{u.id: u for u in users}}
         self.last_email = None
+        self.added = []
 
     def query(self, *args):
         return self
@@ -48,6 +49,10 @@ class FakeSession:
 
     def commit(self):
         pass
+
+    def add(self, row):
+        # A successful sign-in stores a refresh-token row (models/refresh_token.py).
+        self.added.append(row)
 
 
 def make_user(email, is_admin=False):
@@ -126,7 +131,8 @@ def test_f06_memory_backend_caps_keys_and_expires_buckets():
         assert backend.hit(f"k{i}", 1, 60)
     assert len(backend) == 3
     assert backend.hit("k9", 1, 60) is False
-    with patch("backend.app.security.ratelimit.time.monotonic", return_value=10_000.0):
+    expired_at = backend._buckets["k9"][-1] + 61
+    with patch("backend.app.security.ratelimit.time.monotonic", return_value=expired_at):
         assert backend.hit("k9", 1, 60) is True, "the window expired"
 
 

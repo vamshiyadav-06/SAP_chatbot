@@ -1,3 +1,5 @@
+import { ModeToggle } from './ModeToggle';
+import { shouldFocusInput } from './typeToFocus';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send,
@@ -110,6 +112,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
   }, []);
 
   // Auto-resize textarea
+  // Typing anywhere on the page starts the question: the key goes to the message box (like ChatGPT).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const box = textareaRef.current;
+      if (!box || box.disabled) return;
+      const dialogOpen = document.querySelector('[role="dialog"], [aria-modal="true"]') !== null;
+      if (shouldFocusInput(event, dialogOpen)) box.focus(); // the key then lands in the focused box
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -551,8 +565,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
             isListening
               ? 'Listening... speak now'
               : attachments.length > 0
-              ? 'Ask a question about the attachment, or press Enter to have it explained...'
-              : 'Ask anything about SAP, paste a screenshot (Ctrl+V), or attach documents with +'
+              ? 'Ask about your attached document, or press Enter for a summary…'
+              : 'Ask Clyptus.AI about SAP BRIM: billing, invoicing, FI-CA or subscriptions…'
           }
           rows={1}
           disabled={isLoading}
@@ -682,24 +696,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
               )}
             </div>
 
-            <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-white dark:bg-slate-950">
-              {(['sprint', 'scholar'] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={mode === option}
-                  onClick={() => onModeChange(option)}
-                  title={option === 'sprint' ? 'Direct SAP answers' : 'Knowledge-base answers with RAG'}
-                  className={`px-2 h-6 rounded-md text-[10px] font-medium transition-colors cursor-pointer ${
-                    mode === option
-                      ? 'bg-[#ff6600] text-white'
-                      : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900'
-                  }`}
-                >
-                  {option === 'sprint' ? 'Sprint' : 'Scholar'}
-                </button>
-              ))}
-            </div>
+            <ModeToggle mode={mode} onModeChange={onModeChange} />
 
             {/* Listening status */}
             {isListening && (

@@ -1,9 +1,10 @@
 import React from 'react';
-import { ArrowRight, BookOpenCheck, ShieldAlert, Zap } from 'lucide-react';
+import { ArrowRight, ShieldAlert } from 'lucide-react';
 import { motion } from 'framer-motion';
 import iconOnly from '../../assets/clyptusap-icon.png';
 import type { ChatMode } from '../../types';
 import { MODES, SUGGESTIONS } from './welcomeContent';
+import { ModeToggle } from './ModeToggle';
 
 interface WelcomeScreenProps {
   onSelectPrompt: (prompt: string) => void;
@@ -33,47 +34,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onSelectPrompt, mo
         Ask about SAP and SAP BRIM: configuration, transactions, processes and troubleshooting.
       </p>
 
-      <div
-        role="group"
-        aria-label="Answer mode"
-        className="mx-auto mt-5 grid max-w-xl grid-cols-1 gap-2 text-left sm:grid-cols-2"
-      >
-        {MODES.map(({ id, title, summary, detail }) => {
-          const active = mode === id;
-          const Icon = id === 'sprint' ? Zap : BookOpenCheck;
-          return (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onModeChange(id)}
-              className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500 ${
-                active
-                  ? 'border-orange-500/50 bg-orange-50 dark:border-orange-500/50 dark:bg-orange-500/10'
-                  : 'border-slate-200 bg-white hover:border-orange-500/40 dark:border-slate-800 dark:bg-slate-950'
-              }`}
-            >
-              <span
-                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                  active
-                    ? 'bg-orange-500 text-slate-950'
-                    : 'bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-400'
-                }`}
-              >
-                <Icon size={14} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2">
-                  <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</strong>
-                  <span className={`text-xs ${active ? 'text-orange-700 dark:text-orange-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                    {summary}
-                  </span>
-                </span>
-                <span className="mt-1 block text-xs leading-snug text-slate-600 dark:text-slate-400">{detail}</span>
-              </span>
-            </button>
-          );
-        })}
+      <div className="mt-5 flex flex-col items-center gap-2">
+        <ModeToggle mode={mode} onModeChange={onModeChange} size="md" />
+        <p className="max-w-sm text-xs leading-snug text-slate-600 dark:text-slate-400" aria-live="polite">
+          {MODES.find((m) => m.id === mode)?.detail}
+        </p>
       </div>
 
       <p className="mx-auto mb-2 max-w-xl pt-6 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">

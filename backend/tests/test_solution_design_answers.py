@@ -126,7 +126,14 @@ def test_groq_output_reservation_keeps_requests_inside_the_rate_limit(monkeypatc
     assert llm_service._groq_max_tokens("x" * 60000) == GROQ_MIN_OUTPUT_TOKENS
 
 
-def test_tight_budget_asks_gpt_oss_for_low_reasoning_effort():
+def test_tight_budget_asks_gpt_oss_for_low_reasoning_effort(monkeypatch):
+    import importlib
+    from backend.app.config import settings
+    llm_module = importlib.import_module("backend.app.services.llm_service")
+
+    # The budget depends on the tokens-per-minute limit: pin it instead of reading the developer's .env.
+    monkeypatch.setattr(settings, "GROQ_TOKENS_PER_MINUTE", 8000)
+    monkeypatch.delitem(llm_module._GROQ_OBSERVED_TPM, "openai/gpt-oss-120b", raising=False)
     assert "reasoning_effort" not in llm_service._groq_output_args("openai/gpt-oss-120b", "short prompt")
     tight = llm_service._groq_output_args("openai/gpt-oss-120b", "x" * 20000)
     assert tight["reasoning_effort"] == "low" and tight["max_tokens"] < 4096

@@ -39,7 +39,7 @@ from backend.app.services.sap_classifier import NON_SAP_REFUSAL_RESPONSE, sap_cl
 from backend.app.services.evidence_markers import strip_markers, StreamingMarkerStripper
 from backend.app.services.conversation_memory_service import MemoryIntent, conversation_memory_service
 from backend.app.services.public_payload import public_done_event
-from backend.app.services import audit_log, token_meter
+from backend.app.services import audit_log, languages, token_meter, token_wallet, user_memory
 from backend.app.services.detached_stream import detached, stream_cancellations
 from backend.app.config import settings
 
@@ -160,6 +160,40 @@ def latest_chat_attachments(
         }
         for item in prior_message.uploaded_attachments
     ]
+
+def _saved_memory_text(db: Session, user_id: str, query: str) -> str:
+    """The user's saved memories for this question; a memory failure must never lose the answer."""
+    try:
+        return user_memory.prompt_text(db, user_id, query)
+    except Exception as exc:
+        logger.warning("Saved memory unavailable (%s)", type(exc).__name__)
+        return ""
+
+
+OUT_OF_TOKENS = "You have used all your tokens."
+
+
+def _require_tokens(db: Session, user: User) -> None:
+    token_wallet.refill_if_due(db, user)
+    if not token_wallet.has_balance(user):
+        raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=OUT_OF_TOKENS)
+
+
+def _charge_tokens(db: Session, user: User, token_usage: Dict[str, Any]) -> Optional[float]:
+    """Charge the answer to the user's free tokens; the new balance, or None for unmetered accounts."""
+    token_usage["cost"] = token_wallet.cost_tokens(token_usage["used"])
+    if not token_wallet.is_metered(user):
+        return None
+    try:
+        return round(token_wallet.charge(db, user.id, token_wallet.cost_milli(token_usage["used"])) / token_wallet.MILLI, 2)
+    except Exception as exc:  # an accounting failure must not lose the answer
+        logger.warning("Token charge failed (%s)", type(exc).__name__)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
 
 @router.get("", response_model=List[MessageResponse])
 def get_messages(
@@ -389,6 +423,9 @@ def _sprint_memory(
     summary of turns older than the 20-message window, and keyword recall from this chat or the user's
     other chats. A set "answer" is final and is returned without calling the LLM.
     """
+    saved = user_memory.handle_command(db, user_id, chat_id, query, chat_history or [])
+    if saved is not None:  # "save it" / "remember that ...": stored, confirmed without calling the model
+        return {"intent": "MEMORY_COMMAND", "answer": saved, "summary": None, "recalled": []}
     intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
     memory: Dict[str, Any] = {"intent": intent, "answer": None, "summary": None, "recalled": []}
     if intent in (MemoryIntent.FIRST_MESSAGE_LOOKUP, MemoryIntent.LAST_MESSAGE_LOOKUP):
@@ -486,6 +523,7 @@ def send_message(
     db: Session = Depends(get_db)
 ):
     chat = verify_chat_ownership(chat_id, current_user.id, db)
+    _require_tokens(db, current_user)
 
     attachments_data = [att.model_dump() for att in (msg_in.attachments or [])]
     user_content = msg_in.content.strip()
@@ -682,6 +720,7 @@ def send_message_stream(
 ):
     """Direct POST /chats/{chat_id}/messages/stream endpoint for SSE streaming."""
     chat = verify_chat_ownership(chat_id, current_user.id, db)
+    _require_tokens(db, current_user)
 
     attachments_data = [att.model_dump() for att in (msg_in.attachments or [])]
     user_content = msg_in.content.strip()
@@ -752,6 +791,7 @@ def edit_message_stream(
 ):
     """Replace a user prompt, drop every later message, and stream a fresh answer (SSE)."""
     chat = verify_chat_ownership(chat_id, current_user.id, db)
+    _require_tokens(db, current_user)
     user_msg = (
         db.query(Message)
         .options(*(
@@ -984,6 +1024,20 @@ def handle_streaming_response(
     `usage` events carry the running token estimate; the done event carries `token_usage`.
     """
     regeneration = regeneration_index if is_regeneration else 0
+    # Scholar chats too: "save it" / "remember that ..." is stored and confirmed without the RAG pipeline.
+    if user_memory.parse_command(query) is not None:
+        with SessionLocal() as command_db:
+            history = chat_history if chat_history is not None else conversation_memory_service.get_recent_messages(
+                command_db, chat_id, limit=20, exclude_message_id=user_message_id)
+            reply = user_memory.handle_command(command_db, current_user.id, chat_id, query, history or [])
+        if reply is not None:
+            return handle_sprint_streaming_response(
+                chat_id, query, chat_history=chat_history, current_user=current_user, attachments=attachments,
+                user_message_id=user_message_id,
+                memory={"intent": "MEMORY_COMMAND", "answer": reply, "summary": None, "recalled": []},
+                conversation_chars=conversation_chars, is_regeneration=is_regeneration,
+                regeneration_index=regeneration_index,
+            )
     # Stream id: the only credential save-partial accepts for text shown in this stream (F-37); also how Stop
     # cancels the answer, which otherwise finishes and is saved even if the browser disconnects.
     stream_id = issue_stream_token(current_user.id, chat_id)
@@ -1011,10 +1065,16 @@ def handle_streaming_response(
             )
 
         try:
-            rag_events = with_generation_context(_invoke_rag_stream(
-                save_db, query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id,
+            memory_text = _saved_memory_text(save_db, current_user.id, query)
+            # Another language: ask the pipeline in English (SAP-topic check and retrieval work on English),
+            # verify the English draft, then translate the finished answer for the user.
+            language = languages.normalize(getattr(current_user, "preferred_language", None))
+            translate_answer = not languages.is_english(language)
+            rag_query = languages.question_to_english(query, language)
+            rag_events = user_memory.scoped(with_generation_context(_invoke_rag_stream(
+                save_db, rag_query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id,
                 regeneration_index=regeneration,
-            ), regeneration, llm_info)
+            ), regeneration, llm_info), memory_text)
             for event in token_meter.metered(rag_events, meter):
                 if meter.used_tokens != reported_tokens:
                     reported_tokens = meter.used_tokens
@@ -1027,12 +1087,23 @@ def handle_streaming_response(
 
                 elif event_type == "token":
                     accumulated_text += event.get("content", "")
+                    if translate_answer:
+                        continue  # the verified English draft is translated and shown once it is complete
                     if marker_stripper is not None:
                         event["content"] = marker_stripper.feed(event.get("content", ""))
                         if not event["content"]:
                             continue
 
                 elif event_type == "done":
+                    if translate_answer:
+                        translated = languages.answer_to_language(event.get("answer") or accumulated_text, language)
+                        event["answer"] = translated
+                        accumulated_text = translated
+                        for start in range(0, len(translated), 48):
+                            piece = translated[start:start + 48]
+                            shown = marker_stripper.feed(piece) if marker_stripper is not None else piece
+                            if shown:
+                                yield f"data: {json.dumps({'type': 'token', 'content': shown})}\n\n"
                     if marker_stripper is not None:
                         leftover = marker_stripper.flush()
                         if leftover:
@@ -1110,6 +1181,9 @@ def handle_streaming_response(
 
                     event["message_id"] = assistant_msg.id
                     event["token_usage"] = token_usage
+                    balance = _charge_tokens(save_db, current_user, token_usage)
+                    if balance is not None:
+                        event["token_balance"] = balance
                     event["llm_provider"] = used_provider
                     event["llm_model"] = used_model
                     event["regeneration_count"] = regeneration
@@ -1185,7 +1259,13 @@ def handle_sprint_streaming_response(
         )
         try:
             yield f"data: {json.dumps({'type': 'status', 'stage': 'generating', 'message': 'Generating response...'})}\n\n"
-            route = _sprint_route(query, hist, attachments, memory)
+            memory_text = "" if memory.get("answer") else _saved_memory_text(save_db, current_user.id, query)
+            language = languages.normalize(getattr(current_user, "preferred_language", None))
+            # The SAP-topic check works on English; the model still gets the question as the user wrote it.
+            scope_query = languages.question_to_english(query, language) if not memory.get("answer") else query
+            route = _sprint_route(scope_query, hist, attachments, memory)
+            if route == "refusal" and user_memory.matches_query(memory_text, query):
+                route = "sprint"  # a question about what the user saved is not off-topic
             if route in ("sprint", "conversational"):
                 chunks = llm_service.stream_sprint_reply(
                     query, chat_history=hist, attachments=attachments,
@@ -1196,7 +1276,10 @@ def handle_sprint_streaming_response(
                     regeneration_index=regeneration,
                 )
                 reported_tokens = 0
-                for chunk in token_meter.metered(with_generation_context(chunks, regeneration, llm_info), meter):
+                for chunk in token_meter.metered(
+                        languages.scoped(
+                            user_memory.scoped(with_generation_context(chunks, regeneration, llm_info), memory_text),
+                            language), meter):
                     if meter.used_tokens != reported_tokens:
                         reported_tokens = meter.used_tokens
                         yield _usage_event(reported_tokens)
@@ -1276,6 +1359,9 @@ def handle_sprint_streaming_response(
                 "follow_up_questions": [],
                 "token_usage": token_usage,
             }
+            balance = _charge_tokens(save_db, current_user, token_usage)
+            if balance is not None:
+                event["token_balance"] = balance
             if not current_user.is_admin:
                 event = public_done_event(event)
             yield f"data: {json.dumps(event)}\n\n"

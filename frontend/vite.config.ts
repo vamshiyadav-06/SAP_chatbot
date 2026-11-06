@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 
@@ -46,6 +47,9 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
+  // Tests run with the build defaults, whatever a developer put in frontend/.env.local (for example
+  // VITE_REGISTRATION_ENABLED=true to see the Sign up button).
+  test: { env: { VITE_REGISTRATION_ENABLED: 'false' } },
   build: {
     rollupOptions: {
       output: {

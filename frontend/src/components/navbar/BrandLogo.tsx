@@ -10,6 +10,8 @@ interface BrandLogoProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   /** Orange glow plus a periodic glint across the full logo (public header). */
   shine?: boolean;
+  /** Where the logo leads. Public pages go to the landing page; the signed-in app passes its own home. */
+  to?: string;
   className?: string;
   imgClassName?: string;
 }
@@ -19,6 +21,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   light = false,
   size = 'md',
   shine = false,
+  to = '/',
   className = '',
   imgClassName = '',
 }) => {
@@ -37,7 +40,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
     return (
       <Link
         className={`brand inline-flex items-center ${className}`}
-        to="/"
+        to={to}
         aria-label="Clyptusap.ai home"
       >
         <img
@@ -52,7 +55,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   return (
     <Link
       className={`brand inline-flex items-center gap-2.5 ${light ? 'brand-light' : ''} ${shine ? 'brand-shine' : ''} ${className}`}
-      to="/"
+      to={to}
       aria-label="Clyptusap.ai home"
     >
       {/* On dark surfaces show white text version; on light surfaces show dark text version */}

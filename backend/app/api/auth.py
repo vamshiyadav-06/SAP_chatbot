@@ -1,10 +1,13 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from backend.app.config import settings
 from backend.app.database import get_db
@@ -15,16 +18,27 @@ from backend.app.models.shared_prompt import SharedPrompt
 from backend.app.schemas.auth import ChangePasswordRequest, UserRegister, UserLogin, Token, UserResponse
 from backend.app.schemas.message import TokenSavingsSummary
 from backend.app.security.auth import (
+    REFRESH_REQUEST_HEADER,
     account_is_usable,
     authenticate_user,
+    clear_refresh_cookie,
     create_access_token,
+    find_refresh_token,
     get_current_user,
     get_current_user_allow_password_change,
     hash_password,
+    oauth2_scheme,
+    revoke_refresh_family,
+    revoke_user_refresh_tokens,
+    rotate_refresh_token,
+    set_refresh_cookie,
+    start_refresh_session,
+    user_for_access_token,
     verify_password,
 )
 from backend.app.security.ratelimit import client_ip, rate_limiter
-from backend.app.services import audit_log
+from backend.app.services import audit_log, languages, token_wallet
+from backend.app.services.evidence_markers import strip_markers
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
@@ -36,6 +50,10 @@ INDIVIDUAL_ACCOUNT_AT_ORGANISATION_LOGIN = "Sign in with your individual account
 ACCOUNT_NOT_ACTIVE = "This account is not active. Contact your administrator."
 CURRENT_PASSWORD_INCORRECT = "The current password is incorrect."
 PASSWORD_UNCHANGED = "The new password must be different from the current password."
+REGISTRATION_FAILED = "Registration could not be completed."
+# One message for every refresh failure; the reason goes to the log/audit only.
+SESSION_ENDED = "Your session has ended. Please sign in again."
+REFRESH_REJECTED = "Refresh request rejected."
 
 
 def _guard_login(request: Request, email: str) -> None:
@@ -64,15 +82,34 @@ def require_usable_account(request: Request, action: str, user: User) -> None:
         deny_sign_in(request, action, user, "account_not_active", ACCOUNT_NOT_ACTIVE)
 
 
-def issue_login_token(request: Request, action: str, user: User, db: Session) -> Token:
-    """Successful sign-in: clear the lockout counter, record last_login_at, audit and issue a token."""
-    rate_limiter.clear_login_failures(user.email)
-    user.last_login_at = datetime.now(timezone.utc)
-    db.commit()  # expired attributes reload on access below
-    audit_log.record(action, request=request, principal=user)
-    logger.info("[AUTH] User authenticated successfully: %s (role=%s)", user.email, "admin" if user.is_admin else "user")
+def session_token(user: User) -> Token:
+    """The JSON every sign-in, refresh and password change returns (the refresh token is only a cookie)."""
     access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
     return Token(access_token=access_token, token_type="bearer", user=UserResponse.model_validate(user))
+
+
+def issue_login_token(request: Request, action: str, user: User, db: Session, response: Response) -> Token:
+    """Successful sign-in: clear the lockout counter, record last_login_at, audit, start a refresh-token
+    family (HttpOnly cookie on `response`) and issue an access token."""
+    rate_limiter.clear_login_failures(user.email)
+    token_wallet.refill_if_due(db, user)
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()  # expired attributes reload on access below
+    start_refresh_session(db, user, response)
+    audit_log.record(action, request=request, principal=user)
+    logger.info("[AUTH] User authenticated successfully: %s (role=%s)", user.email, "admin" if user.is_admin else "user")
+    return session_token(user)
+
+
+def _email_registered(db: Session, email: str) -> bool:
+    return db.query(User.id).filter(User.email == email).first() is not None
+
+
+def _registration_rejected(request: Request) -> HTTPException:
+    logger.warning("security_event registration_rejected reason=duplicate")
+    audit_log.record("register", "failure", request=request, details={"reason": "duplicate"})
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=REGISTRATION_FAILED)
+
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserRegister, request: Request, db: Session = Depends(get_db)):
@@ -83,19 +120,15 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Sign-up is temporarily unavailable. Please try again later.")
 
-    existing_user = db.query(User).filter(User.email == user_in.email.lower()).first()
+    email = user_in.email.lower()
+    already_registered = _email_registered(db, email)
     # Hash in both branches so a duplicate email is not revealed by a faster response (F-39).
     password_hash = hash_password(user_in.password)
-    if existing_user:
-        logger.warning("security_event registration_rejected reason=duplicate")
-        audit_log.record("register", "failure", request=request, details={"reason": "duplicate"})
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Registration could not be completed."
-        )
+    if already_registered:
+        raise _registration_rejected(request)
 
     new_user = User(
-        email=user_in.email.lower(),
+        email=email,
         name=user_in.name.strip(),
         password_hash=password_hash,
         is_admin=False,
@@ -104,7 +137,11 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
         account_type="individual",
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # the same e-mail address was registered concurrently
+        db.rollback()
+        raise _registration_rejected(request)
     db.refresh(new_user)
     audit_log.record("register", request=request, principal=new_user, target=new_user.id)
 
@@ -113,7 +150,7 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
     return UserResponse.model_validate(new_user)
 
 @router.post("/login", response_model=Token)
-def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
+def login(login_data: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     _guard_login(request, login_data.email)
     user = authenticate_user(db, login_data.email, login_data.password)
     if not user:
@@ -128,10 +165,10 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
     if getattr(user, "account_type", None) == "organisation":
         deny_sign_in(request, "login", user, "organisation_account", ORGANISATION_ACCOUNT_AT_INDIVIDUAL_LOGIN)
     require_usable_account(request, "login", user)
-    return issue_login_token(request, "login", user, db)
+    return issue_login_token(request, "login", user, db, response)
 
 @router.post("/admin-login", response_model=Token)
-def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
+def admin_login(login_data: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     _guard_login(request, login_data.email)
     user = authenticate_user(db, login_data.email, login_data.password)
     if not user:
@@ -154,12 +191,54 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
         )
 
     require_usable_account(request, "admin_login", user)
-    return issue_login_token(request, "admin_login", user, db)
+    return issue_login_token(request, "admin_login", user, db, response)
+
+
+class LanguageIn(BaseModel):
+    language: str
+
+
+@router.patch("/me/language", response_model=UserResponse)
+def set_language(body: LanguageIn, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Choose the language answers are written in (and questions may be asked in, besides English)."""
+    if body.language.strip().lower() not in languages.LANGUAGES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported language.")
+    current_user.preferred_language = languages.normalize(body.language)
+    db.commit()
+    db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
 
 
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user_allow_password_change)):
+def get_me(current_user: User = Depends(get_current_user_allow_password_change), db: Session = Depends(get_db)):
+    token_wallet.refill_if_due(db, current_user)
     return UserResponse.model_validate(current_user)
+
+
+def _session_ended(request: Request, reason: str) -> JSONResponse:
+    """Every refresh failure: one generic 401 that also clears the cookie."""
+    logger.warning("security_event refresh_rejected reason=%s", reason)
+    if reason in ("reuse_detected", "session_revoked"):
+        audit_log.record("token_refresh", "denied", request=request, details={"reason": reason})
+    response = JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": SESSION_ENDED},
+                            headers={"WWW-Authenticate": "Bearer"})
+    clear_refresh_cookie(response)
+    return response
+
+
+@router.post("/refresh", response_model=Token,
+             summary="Exchange the refresh-token cookie for a new access token (rotates the cookie)")
+def refresh_session(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Reads the token from the HttpOnly cookie only, never from the body, query or headers. The
+    X-Refresh-Request header is required as a CSRF defence (with SameSite=Strict on the cookie)."""
+    if request.headers.get(REFRESH_REQUEST_HEADER) != "1":
+        logger.warning("security_event refresh_rejected reason=missing_csrf_header")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=REFRESH_REJECTED)
+    result = rotate_refresh_token(db, request.cookies.get(settings.REFRESH_COOKIE_NAME))
+    if result.user is None:
+        return _session_ended(request, result.reason or "unknown")
+    set_refresh_cookie(response, result.raw, result.expires_at)
+    return session_token(result.user)
 
 
 @router.get("/me/token-savings", response_model=TokenSavingsSummary,
@@ -190,10 +269,12 @@ def my_token_savings(current_user: User = Depends(get_current_user), db: Session
 def change_password(
     change: ChangePasswordRequest,
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user_allow_password_change),
     db: Session = Depends(get_db),
 ):
-    """Set a new password, clear a pending forced change and revoke every existing token."""
+    """Set a new password, clear a pending forced change and revoke every existing token (access and
+    refresh); the response is a new session with a new refresh cookie."""
     if not rate_limiter.allow("change-password", current_user.id, settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60):
         logger.warning("security_event password_change_throttled")
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
@@ -206,11 +287,12 @@ def change_password(
     current_user.password_hash = hash_password(change.new_password)
     current_user.must_change_password = False
     current_user.token_version += 1
+    revoke_user_refresh_tokens(db, current_user.id)
     db.commit()
     db.refresh(current_user)
+    start_refresh_session(db, current_user, response)
     audit_log.record("password_change", request=request, principal=current_user, target=current_user.id)
-    access_token = create_access_token(data={"sub": current_user.id, "ver": current_user.token_version})
-    return Token(access_token=access_token, token_type="bearer", user=UserResponse.model_validate(current_user))
+    return session_token(current_user)
 
 
 @router.get("/me/export", summary="Export the authenticated user's account and conversation data")
@@ -219,6 +301,9 @@ def export_my_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Regular users get what the chat history shows them (api/messages.py get_messages): no knowledge-base
+    # citations, web sources, image source pages or inline [E#] evidence markers.
+    is_admin = bool(current_user.is_admin)
     chats = db.query(Chat).filter(Chat.user_id == current_user.id).order_by(Chat.created_at).all()
     message_ids = [message.id for chat in chats for message in chat.messages]
     shared_by_message = {}
@@ -228,7 +313,7 @@ def export_my_account(
                 "created_at": shared.created_at,
                 "revoked": shared.revoked,
                 "content": shared.content,
-                "answer": shared.answer,
+                "answer": shared.answer if is_admin or shared.answer is None else strip_markers(shared.answer),
             }
 
     chat_exports = []
@@ -238,7 +323,7 @@ def export_my_account(
             message_exports.append({
                 "id": message.id,
                 "role": message.role,
-                "content": message.content,
+                "content": message.content if is_admin else strip_markers(message.content or ""),
                 "created_at": message.created_at,
                 "feedback": message.feedback,
                 "citations": [
@@ -250,18 +335,18 @@ def export_my_account(
                         "citation_text": citation.citation_text,
                     }
                     for citation in message.citations
-                ],
+                ] if is_admin else [],
                 "web_sources": [
                     {"url": source.url, "title": source.title, "domain": source.domain, "snippet": source.snippet}
                     for source in message.web_sources
-                ],
+                ] if is_admin else [],
                 "images": [
                     {
                         "url": image.url,
                         "description": image.description,
                         "alt_text": image.alt_text,
-                        "source_url": image.source_url,
-                        "source_title": image.source_title,
+                        "source_url": image.source_url if is_admin else None,
+                        "source_title": image.source_title if is_admin else None,
                     }
                     for image in message.images
                 ],
@@ -335,8 +420,29 @@ def delete_my_account(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(request: Request, current_user: User = Depends(get_current_user_allow_password_change),
+def logout(request: Request, response: Response, token: Optional[str] = Depends(oauth2_scheme),
            db: Session = Depends(get_db)):
-    current_user.token_version += 1
+    """End the account's sessions: every access token (token_version) and every refresh token, and clear
+    the cookie. The access token may already have expired (it lives 15 minutes), so a valid refresh cookie
+    identifies the account too; a stale cookie still has its own family revoked. 401 with neither."""
+    user = user_for_access_token(token, db) if token else None
+    row = find_refresh_token(db, request.cookies.get(settings.REFRESH_COOKIE_NAME))
+    if user is None and row is not None and row.revoked_at is None:
+        owner = db.query(User).filter(User.id == row.user_id).first()
+        if owner is not None and owner.token_version == row.token_version:
+            user = owner
+    if user is None and row is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials",
+                            headers={"WWW-Authenticate": "Bearer"})
+    if user is not None:
+        user.token_version += 1
+        revoke_user_refresh_tokens(db, user.id)
+    else:
+        revoke_refresh_family(db, row.family_id)
     db.commit()
-    audit_log.record("logout", request=request, principal=current_user)
+    clear_refresh_cookie(response)
+    if user is not None:
+        audit_log.record("logout", request=request, principal=user)
+    else:
+        audit_log.record("logout", request=request, actor_id=row.user_id, actor_type="user",
+                         details={"reason": "stale_session"})

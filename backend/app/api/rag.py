@@ -14,6 +14,8 @@ from backend.app.models.message import Message
 from backend.app.security.auth import get_current_user
 from backend.app.services.evidence_markers import StreamingMarkerStripper, strip_markers
 from backend.app.services.public_payload import public_done_event
+from backend.app.services.llm_service import RequestDeadline, current_deadline, deadline_scope
+from backend.app.config import settings
 
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -75,13 +77,24 @@ def query_rag(
         )
 
     try:
-        result = rag_service.process_query(
-            db,
-            request.query,
-            chat_history=chat_history,
-            user=current_user,
-            chat_id=chat.id if chat else None
-        )
+        if current_deadline() is None:
+            seconds = max(1.0, float(getattr(settings, "LLM_REQUEST_DEADLINE_SECONDS", 120)))
+            with deadline_scope(RequestDeadline(seconds=seconds)):
+                result = rag_service.process_query(
+                    db,
+                    request.query,
+                    chat_history=chat_history,
+                    user=current_user,
+                    chat_id=chat.id if chat else None
+                )
+        else:
+            result = rag_service.process_query(
+                db,
+                request.query,
+                chat_history=chat_history,
+                user=current_user,
+                chat_id=chat.id if chat else None
+            )
 
     except Exception:
         db.rollback()

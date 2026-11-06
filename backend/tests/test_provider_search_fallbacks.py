@@ -132,6 +132,13 @@ def test_web_search_returns_no_results_when_tavily_is_unavailable():
     service.tavily.search.assert_not_called()
 
 
+def test_explicit_disabled_sentinel_prevents_tavily_client_creation():
+    with patch.object(settings, "WEB_SEARCH_API_KEY", "disabled"):
+        service = UnifiedSearchService()
+
+    assert service.search("SAP BRIM configuration") == []
+
+
 def test_image_search_uses_tavily_and_preserves_sap_domain_filter():
     service = UnifiedSearchService()
     service.tavily._client = MagicMock()

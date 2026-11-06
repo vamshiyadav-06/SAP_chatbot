@@ -1,17 +1,20 @@
+import hashlib
 import hmac
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Optional
 import jwt
 import bcrypt
-from fastapi import Depends, HTTPException, Request, status, Header
+from fastapi import Depends, HTTPException, Request, Response, status, Header
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
 from backend.app.database import get_db
+from backend.app.models.refresh_token import RefreshToken
 from backend.app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login", auto_error=False)
@@ -108,6 +111,142 @@ def _user_for_token(token: str, db: Session) -> Optional[User]:
     if not account_is_usable(user):
         return None
     return user
+
+
+def user_for_access_token(token: str, db: Session) -> Optional[User]:
+    """Public form of _user_for_token for endpoints that accept more than one credential (logout)."""
+    return _user_for_token(token, db)
+
+
+# --------------------------------------------------------------------------------------------------
+# Refresh tokens (models/refresh_token.py): an HttpOnly cookie scoped to /api/auth, rotated on every use
+# --------------------------------------------------------------------------------------------------
+
+REFRESH_COOKIE_PATH = f"{settings.API_V1_STR}/auth"
+# Browsers cannot add a custom header to a cross-site form post, and cross-origin fetches with it need a
+# CORS preflight, so requiring it (with SameSite=Strict) blocks cross-site refresh requests.
+REFRESH_REQUEST_HEADER = "X-Refresh-Request"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def hash_refresh_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def issue_refresh_token(db: Session, user: User, *, family_id: Optional[str] = None,
+                        expires_at: Optional[datetime] = None) -> tuple[str, RefreshToken]:
+    """Add (not commit) a refresh token row; returns the raw token for the cookie and the row. Without
+    `family_id` a new family (a new sign-in) starts; rotations pass the family and its original expiry."""
+    raw = secrets.token_urlsafe(32)  # 256 bits
+    now = _utcnow()
+    row = RefreshToken(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        family_id=family_id or str(uuid.uuid4()),
+        token_hash=hash_refresh_token(raw),
+        token_version=user.token_version or 0,
+        created_at=now,
+        expires_at=expires_at or now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+    db.add(row)
+    return raw, row
+
+
+def revoke_refresh_family(db: Session, family_id: str) -> None:
+    (db.query(RefreshToken)
+     .filter(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
+     .update({RefreshToken.revoked_at: _utcnow()}, synchronize_session=False))
+
+
+def revoke_user_refresh_tokens(db: Session, user_id: str) -> None:
+    (db.query(RefreshToken)
+     .filter(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+     .update({RefreshToken.revoked_at: _utcnow()}, synchronize_session=False))
+
+
+def find_refresh_token(db: Session, raw: Optional[str], *, lock: bool = False) -> Optional[RefreshToken]:
+    if not raw:
+        return None
+    query = db.query(RefreshToken).filter(RefreshToken.token_hash == hash_refresh_token(raw))
+    return (query.with_for_update() if lock else query).first()
+
+
+@dataclass
+class RefreshResult:
+    """`user` and `raw` are set on success; otherwise `reason` says why (audit log only, never the client)."""
+    user: Optional[User] = None
+    raw: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    reason: Optional[str] = None
+
+
+def rotate_refresh_token(db: Session, raw: Optional[str]) -> RefreshResult:
+    """Validate the presented token and rotate it within its family; commits.
+
+    Fails when the token is unknown, revoked or expired, when the user's token_version changed (password
+    change, logout, reset, deactivation) or the account may no longer sign in. A token that was already
+    rotated is accepted again only within REFRESH_TOKEN_REUSE_GRACE_SECONDS (two tabs refreshing at the
+    same moment get sibling tokens); later, it is treated as stolen and its whole family is revoked."""
+    row = find_refresh_token(db, raw, lock=True)  # the lock serialises concurrent rotations of one token
+    if row is None:
+        db.rollback()
+        return RefreshResult(reason="missing" if not raw else "unknown")
+    now = _utcnow()
+    if row.revoked_at is not None:
+        db.rollback()
+        return RefreshResult(reason="revoked")
+    if row.expires_at <= now:
+        db.rollback()
+        return RefreshResult(reason="expired")
+    user = db.query(User).filter(User.id == row.user_id).first()
+    if user is None or user.token_version != row.token_version or not account_is_usable(user):
+        revoke_refresh_family(db, row.family_id)
+        db.commit()
+        return RefreshResult(reason="session_revoked")
+    if row.rotated_at is not None:
+        if now - row.rotated_at > timedelta(seconds=settings.REFRESH_TOKEN_REUSE_GRACE_SECONDS):
+            revoke_refresh_family(db, row.family_id)
+            db.commit()
+            return RefreshResult(reason="reuse_detected")
+        new_raw, _ = issue_refresh_token(db, user, family_id=row.family_id, expires_at=row.expires_at)
+    else:
+        new_raw, new_row = issue_refresh_token(db, user, family_id=row.family_id, expires_at=row.expires_at)
+        row.rotated_at = now
+        row.replaced_by_id = new_row.id
+    expires_at = row.expires_at
+    db.commit()
+    return RefreshResult(user=user, raw=new_raw, expires_at=expires_at)
+
+
+def _refresh_cookie_options() -> dict:
+    return {
+        "path": REFRESH_COOKIE_PATH,
+        "httponly": True,
+        "samesite": "strict",
+        "secure": settings.ENVIRONMENT.lower() == "production",
+    }
+
+
+def set_refresh_cookie(response: Response, raw: str, expires_at: Optional[datetime] = None) -> None:
+    """Max-Age is REFRESH_TOKEN_EXPIRE_DAYS on sign-in; after a rotation, what is left of the session."""
+    max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+    if expires_at is not None:
+        max_age = max(0, min(max_age, int((expires_at - _utcnow()).total_seconds())))
+    response.set_cookie(settings.REFRESH_COOKIE_NAME, raw, max_age=max_age, **_refresh_cookie_options())
+
+
+def clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(settings.REFRESH_COOKIE_NAME, **_refresh_cookie_options())
+
+
+def start_refresh_session(db: Session, user: User, response: Response) -> None:
+    """A successful sign-in (or a session re-issued after a password change): a new family and cookie."""
+    raw, _ = issue_refresh_token(db, user)
+    db.commit()
+    set_refresh_cookie(response, raw)
 
 
 def _credentials_exception() -> HTTPException:

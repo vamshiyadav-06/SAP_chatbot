@@ -3,7 +3,7 @@
 #   docker build -f backend/Dockerfile -t sap-brim-backend .
 # Configuration comes from environment variables (docker compose passes the root .env); no .env file is
 # copied into the image (.dockerignore).
-FROM python:3.12-slim
+FROM python:3.12.16-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -18,10 +18,14 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# CPU-only PyTorch first: the default CUDA build adds several GB and the backend never uses a GPU.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2.0"
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install -r backend/requirements.txt
+# Reproducible install: backend/requirements.lock pins every package (Linux, Python 3.12) with hashes and
+# uses the CPU-only PyTorch build (the CUDA build adds several GB; the backend never uses a GPU).
+# Regenerate after changing backend/requirements.txt (see DEPLOYMENT.md, "Dependencies").
+RUN pip install --upgrade "pip>=26.2"
+COPY backend/requirements.lock backend/requirements.lock
+RUN pip install --require-hashes --no-deps --only-binary :all: \
+      --extra-index-url https://download.pytorch.org/whl/cpu -r backend/requirements.lock \
+ && pip check
 
 # Bake the models into the image so containers start without downloading them and the unprivileged user
 # never has to write into site-packages:

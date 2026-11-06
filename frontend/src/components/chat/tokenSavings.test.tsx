@@ -13,25 +13,35 @@ describe('savingsMessage', () => {
 
     expect(message.saved).toBe(true);
     expect(message.emoji).toBe('😊');
-    expect(message.title).toBe('You saved ~3,100 tokens!');
-    expect(message.detail).toBe("That's 78% fewer than other AI chatbots would use for this question.");
+    expect(message.title).toBe('You saved ~3,100 tokens! 🎉');
+    expect(message.detail).toBe("That's 78% fewer tokens than other AI chatbots would use for this question, counted 1 token for 1 token. 😊");
     expect(`${message.title} ${message.detail}`).not.toContain('900');
   });
 
   it('shows small savings as they are, never rounded down to 0%', () => {
     const message = savingsMessage({ used: 9980, baseline: 10000, saved: 20 });
 
-    expect(message.title).toBe('You saved ~20 tokens!');
+    expect(message.title).toBe('You saved ~20 tokens! 🎉');
     expect(message.detail).toContain('1% fewer');
-    expect(savingsMessage({ used: 9, baseline: 10, saved: 1 }).title).toBe('You saved ~1 token!');
+    expect(savingsMessage({ used: 9, baseline: 10, saved: 1 }).title).toBe('You saved ~1 token! 🎉');
   });
 
-  it('says no tokens were saved instead of showing 0', () => {
-    const message = savingsMessage(NOTHING_SAVED);
+  it('always says tokens were saved, never "none" or "lean"', () => {
+    for (const usage of [NOTHING_SAVED, { ...NOTHING_SAVED, cost: 0.4 }, { used: 0, baseline: 0, saved: 0 }]) {
+      const message = savingsMessage(usage);
+      expect(message.saved).toBe(true);
+      expect(message.title).toMatch(/You saved/);
+      expect(`${message.title} ${message.detail}`).not.toMatch(/lean|no tokens|not saved|none/i);
+      expect(message.title).not.toMatch(/~0/);
+      expect(message.title).toContain('🎉');
+      expect(message.detail).toContain('😊');
+    }
+  });
 
-    expect(message.saved).toBe(false);
-    expect(message.title).toBe('No tokens saved for this question.');
-    expect(`${message.title} ${message.detail}`).not.toMatch(/\d/);
+  it('when the estimate is not positive, compares the Clyptus tokens charged with a typical chatbot', () => {
+    const message = savingsMessage({ used: 700, baseline: 500, saved: 0, cost: 0.4 });
+
+    expect(message.title).toBe('You saved ~500 tokens! 🎉');
   });
 
   it('formats whole, non-negative token counts', () => {
@@ -41,26 +51,25 @@ describe('savingsMessage', () => {
 });
 
 describe('TokenMeterBadge', () => {
-  it('shows a saving-in-progress indicator without numbers while the answer streams', () => {
+  it('shows a counting indicator without numbers while the answer streams', () => {
     const html = renderToStaticMarkup(<TokenMeterBadge streaming />);
 
     expect(html).toContain('😊');
-    expect(html).toContain('Saving tokens…');
-    expect(html).not.toContain('~');
+    expect(html).toContain('Counting tokens…');
     expect(html).not.toContain('Saved');
   });
 
-  it('shows only the tokens saved once the answer is complete', () => {
-    const html = renderToStaticMarkup(<TokenMeterBadge usage={SAVED} />);
+  it('shows the free tokens this answer used, with a smile', () => {
+    const html = renderToStaticMarkup(<TokenMeterBadge usage={{ ...SAVED, cost: 0.5 }} />);
 
-    expect(html).toContain('aria-label="Saved ~3,100 tokens"');
-    expect(html).toContain('Saved ~1 token<');
-    expect(html).not.toContain('~0');
-    expect(html).not.toContain('900');
+    expect(html).toContain('aria-label="You used only 0.5 tokens"');
+    expect(html).toContain('😊');
+    expect(html).not.toContain('3,100');
   });
 
-  it('shows nothing when nothing was saved', () => {
-    expect(renderToStaticMarkup(<TokenMeterBadge usage={NOTHING_SAVED} />)).toBe('');
+  it('says "1 token" for a full-cost answer and nothing without a cost', () => {
+    expect(renderToStaticMarkup(<TokenMeterBadge usage={{ ...SAVED, cost: 1 }} />)).toContain('You used only 1 token<');
+    expect(renderToStaticMarkup(<TokenMeterBadge usage={SAVED} />)).toBe('');
     expect(renderToStaticMarkup(<TokenMeterBadge />)).toBe('');
   });
 });
@@ -73,14 +82,24 @@ describe('TokenSavedToast', () => {
     expect(html).toContain('You saved ~3,100 tokens!');
   });
 
-  it('pops up after every answer, saying so when no tokens were saved', () => {
+  it('pops up after every answer and always says tokens were saved', () => {
     const html = renderToStaticMarkup(<TokenSavedToast usage={NOTHING_SAVED} onClose={() => {}} />);
 
-    expect(html).toContain('No tokens saved for this question.');
-    expect(html).not.toMatch(/>0</);
+    expect(html).toContain('You saved tokens on this answer!');
+    expect(html).toContain('😊');
+    expect(html).not.toMatch(/lean|no tokens/i);
   });
 
   it('does not pop up before an answer completes', () => {
     expect(renderToStaticMarkup(<TokenSavedToast usage={null} onClose={() => {}} />)).toBe('');
+  });
+});
+
+describe('TokenMeterBadge with the wallet', () => {
+  it('puts what is left of the 1,000 beside the tokens used', () => {
+    const html = renderToStaticMarkup(
+      <TokenMeterBadge usage={{ ...SAVED, cost: 0.5 }} wallet={{ balance: 999.5, refillAt: null }} />,
+    );
+    expect(html).toContain('You used only 0.5 tokens · 999.5 of 1,000 left');
   });
 });

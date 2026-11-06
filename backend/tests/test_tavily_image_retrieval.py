@@ -1,8 +1,19 @@
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
+from backend.app.config import settings
 from backend.app.services.search.base import ImageHit
 from backend.app.services.web_search_service import WebSearchService
+
+
+@pytest.fixture(autouse=True)
+def _image_search_enabled(monkeypatch):
+    """Image search runs only with the web fallback on; pin it (and the image limit) instead of
+    inheriting WEB_FALLBACK_ENABLED / TAVILY_MAX_IMAGES from the environment or .env."""
+    monkeypatch.setattr(settings, "WEB_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(settings, "TAVILY_MAX_IMAGES", 4)
 
 
 def _service_with_response(response):
@@ -57,6 +68,13 @@ def test_no_images_or_tavily_failure_degrades_to_empty_images():
     service = _service_with_response({})
     service.client.search.side_effect = TimeoutError("timed out")
     assert service.search_sap_images("Show SAP BRIM architecture diagram") == []
+
+
+def test_image_search_is_off_when_the_web_fallback_is_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "WEB_FALLBACK_ENABLED", False)
+    service = _service_with_response({"images": [{"url": "https://cdn.example.com/brim-flow.png"}]})
+    assert service.search_sap_images("Show SAP BRIM process flow diagram") == []
+    service.client.search.assert_not_called()
 
 
 def test_normal_image_search_uses_tavily_and_filters_unsafe_image_urls():

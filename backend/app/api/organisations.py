@@ -171,7 +171,8 @@ def verify_activation_code(body: ActivationCodeIn, request: Request, db: Session
 
 
 @router.post("/activation/complete", response_model=Token, status_code=status.HTTP_201_CREATED)
-def complete_activation(body: ActivationCompleteIn, request: Request, db: Session = Depends(get_db)):
+def complete_activation(body: ActivationCompleteIn, request: Request, response: Response,
+                        db: Session = Depends(get_db)):
     """Create the owner account and activate the organisation. The code row (and the organisation) are
     locked so two concurrent requests cannot both use one code."""
     _limit(request, "org-activation", settings.ORG_ACTIVATION_RATE_LIMIT_PER_MINUTE, 60)
@@ -229,11 +230,12 @@ def complete_activation(body: ActivationCompleteIn, request: Request, db: Sessio
         db.rollback()
         raise _activation_failed(request, "email_in_use", None, action="org_activation")
     audit_log.record("org_activation", request=request, principal=owner, target=organisation.id)
-    return issue_login_token(request, "org_login", owner, db)
+    return issue_login_token(request, "org_login", owner, db, response)
 
 
 @router.post("/auth/login", response_model=Token)
-def organisation_login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
+def organisation_login(login_data: UserLogin, request: Request, response: Response,
+                       db: Session = Depends(get_db)):
     """Sign-in for organisation accounts, with the same rate limit, lockout and timing rules as /auth/login."""
     _guard_login(request, login_data.email)
     user = authenticate_user(db, login_data.email, login_data.password)
@@ -250,7 +252,7 @@ def organisation_login(login_data: UserLogin, request: Request, db: Session = De
     if user.account_type != ACCOUNT_ORGANISATION:
         deny_sign_in(request, "org_login", user, "individual_account", INDIVIDUAL_ACCOUNT_AT_ORGANISATION_LOGIN)
     require_usable_account(request, "org_login", user)
-    return issue_login_token(request, "org_login", user, db)
+    return issue_login_token(request, "org_login", user, db, response)
 
 
 # --------------------------------------------------------------------------------------------------

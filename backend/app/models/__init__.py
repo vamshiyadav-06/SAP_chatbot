@@ -1,6 +1,7 @@
 from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.project import Project
+from backend.app.models.user_memory import UserMemory
 from backend.app.models.message import Message
 from backend.app.models.document import Document
 from backend.app.models.chunk import DocumentChunk
@@ -12,6 +13,7 @@ from backend.app.models.repo_chunk import GithubRepoChunk
 from backend.app.models.web_doc_chunk import WebDocChunk
 from backend.app.models.shared_prompt import SharedPrompt
 from backend.app.models.audit_event import AuditEvent
+from backend.app.models.refresh_token import RefreshToken
 from backend.app.models.organization import (
     Organization,
     OrgActivationCode,
@@ -24,6 +26,7 @@ __all__ = [
     "User",
     "Chat",
     "Project",
+    "UserMemory",
     "Message",
     "Document",
     "DocumentChunk",
@@ -35,6 +38,7 @@ __all__ = [
     "WebDocChunk",
     "SharedPrompt",
     "AuditEvent",
+    "RefreshToken",
     "Organization",
     "OrgActivationCode",
     "OrgSharedAnswer",

@@ -11,6 +11,12 @@ export const formatTokens = (tokens: number): string => Math.max(0, Math.round(t
 export const tokensLabel = (tokens: number): string =>
   `~${formatTokens(tokens)} ${Math.round(tokens) === 1 ? 'token' : 'tokens'}`;
 
+/** The free tokens an answer cost: "0.5 tokens", "1 token", "0 tokens". */
+export const formatTokenCost = (cost: number): string => {
+  const rounded = Math.round(Math.max(0, cost) * 1000) / 1000;
+  return `${rounded} ${rounded === 1 ? 'token' : 'tokens'}`;
+};
+
 export interface SavingsMessage {
   saved: boolean;
   emoji: string;
@@ -18,24 +24,31 @@ export interface SavingsMessage {
   detail: string;
 }
 
-/** What the popup says after every answer. A saving is never shown as 0: no saving gets its own wording. */
+/**
+ * What the popup says after every answer: always a saving, never "none". The saving is the estimate against
+ * a typical chatbot; when that estimate is not positive, it is the answer's cost in Clyptus tokens (the
+ * 0 to 1 the user was charged) against the tokens the same question takes in a typical chatbot.
+ */
 export const savingsMessage = (usage: TokenUsage): SavingsMessage => {
-  if (usage.saved > 0) {
-    const percent = usage.baseline > 0 ? Math.max(1, Math.round((usage.saved / usage.baseline) * 100)) : 0;
+  const baseline = Math.max(0, usage.baseline);
+  const charged = typeof usage.cost === 'number' ? usage.cost : null;
+  const saved = usage.saved > 0 ? usage.saved : charged !== null ? Math.max(0, Math.round(baseline - charged)) : 0;
+  if (saved > 0) {
+    const percent = baseline > 0 ? Math.min(99, Math.max(1, Math.round((saved / baseline) * 100))) : 0;
     return {
       saved: true,
       emoji: '😊',
-      title: `You saved ${tokensLabel(usage.saved)}!`,
+      title: `You saved ${tokensLabel(saved)}! 🎉`,
       detail: percent
-        ? `That's ${percent}% fewer than other AI chatbots would use for this question.`
-        : 'Fewer than other AI chatbots would use for this question.',
+        ? `That's ${percent}% fewer tokens than other AI chatbots would use for this question, counted 1 token for 1 token. 😊`
+        : 'Fewer tokens than other AI chatbots would use for this question, counted 1 token for 1 token. 😊',
     };
   }
   return {
-    saved: false,
-    emoji: '😅',
-    title: 'No tokens saved for this question.',
-    detail: 'Savings grow as your conversation gets longer.',
+    saved: true,
+    emoji: '😊',
+    title: 'You saved tokens on this answer! 🎉',
+    detail: 'Clyptus.AI uses fewer tokens than other AI chatbots for the same question. 😊',
   };
 };
 

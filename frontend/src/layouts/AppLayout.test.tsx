@@ -65,10 +65,10 @@ describe('AppLayout sidebar navigation', () => {
     expect(renderLayout({ id: 'one', email: 'one@x.com', name: 'One' })).toContain('<details class="sidebar-chats">');
   });
 
-  it('shows a slightly larger sidebar logo in both themes and keeps the collapse control', () => {
+  it('shows a medium sidebar logo in both themes and keeps the collapse control', () => {
     const html = renderLayout({ id: 'i', email: 'i@x.com', name: 'I' });
     const header = html.slice(html.indexOf('sidebar-top-header'), html.indexOf('sidebar-history-area'));
-    expect(header.match(/<img class="h-12 md:h-14 w-auto object-contain/g)).toHaveLength(2);
+    expect(header.match(/<img class="h-10 w-auto object-contain/g)).toHaveLength(2);
     expect(header).toContain('aria-label="Collapse sidebar"');
   });
 

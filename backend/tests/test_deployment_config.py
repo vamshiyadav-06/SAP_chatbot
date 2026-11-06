@@ -74,6 +74,7 @@ def test_production_template_targets_the_compose_database_and_https_origin():
     assert values["ENVIRONMENT"] == "production"
     assert values["ALLOWED_ORIGINS"] == f"https://{values['APP_DOMAIN']}"
     assert values["INCLUDE_SELF_AUTHORED_DOCS"] == "False"
+    assert values["REGISTRATION_ENABLED"] == "False"
 
 
 def test_untouched_production_template_is_refused_at_startup():
@@ -195,3 +196,123 @@ def test_web_image_builds_the_app_and_proxies_the_api_with_streaming():
     assert "reverse_proxy backend:8000" in api_block and "flush_interval -1" in api_block
     assert "try_files {path} /index.html" in caddyfile
     assert "frame-ancestors 'none'" in caddyfile
+    assert "VITE_REGISTRATION_ENABLED" in dockerfile
+    assert _compose()["services"]["web"]["build"]["args"]["VITE_REGISTRATION_ENABLED"] == "${REGISTRATION_ENABLED:-False}"
+
+
+# --- staging template, gate and image pins ---------------------------------------------------------------
+
+STAGING_TEMPLATE = ROOT_DIR / ".env.staging.example"
+GATE = ROOT_DIR / "frontend" / "caddy" / "access" / "basic_auth.caddy"
+LOCK = ROOT_DIR / "backend" / "requirements.lock"
+
+
+def test_staging_template_covers_compose_and_uses_only_known_keys():
+    values = _values(STAGING_TEMPLATE)
+    keys = [key for key, _ in _pairs(STAGING_TEMPLATE)]
+    assert len(keys) == len(set(keys))
+    assert _compose_variables(PROD_COMPOSE) <= set(values)
+    used = _compose_variables(PROD_COMPOSE) | set(Settings.model_fields) | {"COMPOSE_FILE", "COMPOSE_PROJECT_NAME"}
+    assert [key for key in values if key not in used] == []
+    assert {key: values[key] for key in SECRET_KEYS if values.get(key)} == {}
+    assert values["STAGING_BASIC_AUTH_HASH"] in ("", "''")
+
+
+def test_staging_template_is_locked_down():
+    values = _values(STAGING_TEMPLATE)
+    assert values["ENVIRONMENT"] == "production"
+    assert values["REGISTRATION_ENABLED"] == "False"
+    assert values["ACCESS_MODE"] == "basic_auth"
+    assert values["WEB_BIND"] == "127.0.0.1"
+    assert values["COMPOSE_PROJECT_NAME"] not in ("", "sap_brim", "sap_brim_prod")
+    assert values["ALLOWED_ORIGINS"] == f"https://{values['APP_DOMAIN']}"
+    url = urlparse(values["DATABASE_URL"])
+    assert (url.hostname, url.port, url.password) == ("postgres", 5432, values["SAP_BRIM_DB_PASSWORD"])
+    assert values["EMBEDDING_MODEL"] == _values(DEV_TEMPLATE)["EMBEDDING_MODEL"]
+
+
+def test_completed_staging_template_passes_the_staging_preflight(monkeypatch):
+    from backend.app.preflight import check_settings
+    values = _values(STAGING_TEMPLATE)
+    values.pop("STAGING_BASIC_AUTH_HASH")
+    monkeypatch.setenv("ACCESS_MODE", "basic_auth")
+    monkeypatch.setenv("STAGING_BASIC_AUTH_USER", "staging")
+    monkeypatch.setenv("STAGING_BASIC_AUTH_HASH", "bcrypt-hash")
+    monkeypatch.setenv("WEB_BIND", "127.0.0.1")
+    settings = _settings_from(
+        values, JWT_SECRET=PRIVATE_JWT, OPENROUTER_API_KEY="staging-key",
+        DATABASE_URL=values["DATABASE_URL"].replace("change-me-app-password", "Q2v8_private-db-pass"),
+        SUPER_ADMIN_EMAIL="admin@staging.example.com", SUPER_ADMIN_PASSWORD="a-private-admin-password",
+    )
+    report = check_settings(settings, expect_staging=True)
+    assert not report.failed, report.lines
+
+
+def test_staging_preflight_rejects_missing_gate_or_public_bind(monkeypatch):
+    from backend.app.preflight import check_settings
+    values = _values(STAGING_TEMPLATE)
+    settings = _settings_from(
+        values,
+        JWT_SECRET=PRIVATE_JWT,
+        OPENROUTER_API_KEY="staging-key",
+        DATABASE_URL=values["DATABASE_URL"].replace("change-me-app-password", "Q2v8_private-db-pass"),
+        SUPER_ADMIN_EMAIL="admin@staging.example.com",
+        SUPER_ADMIN_PASSWORD="a-private-admin-password",
+    )
+    monkeypatch.setenv("ACCESS_MODE", "open")
+    monkeypatch.delenv("STAGING_BASIC_AUTH_USER", raising=False)
+    monkeypatch.delenv("STAGING_BASIC_AUTH_HASH", raising=False)
+    monkeypatch.setenv("WEB_BIND", "0.0.0.0")
+    report = check_settings(settings, expect_staging=True)
+    assert report.failed
+    assert any("ACCESS_MODE" in line for line in report.lines)
+    assert any("STAGING_BASIC_AUTH" in line for line in report.lines)
+    assert any("WEB_BIND" in line for line in report.lines)
+
+
+def test_staging_gate_covers_the_app_and_every_api_request():
+    gate = GATE.read_text(encoding="utf-8")
+    assert "basic_auth @staging_gate" in gate and "not path /health" in gate
+    assert 'header Authorization "Bearer *"' not in gate
+    assert not any(endpoint in gate for endpoint in (
+        "/api/auth/register", "/api/auth/login", "/api/auth/admin-login", "/api/auth/refresh",
+        "/api/org/auth/login", "/api/org/requests", "/api/org/activation/", "/api/shared/",
+    ))
+    caddyfile = CADDYFILE.read_text(encoding="utf-8")
+    assert "import /etc/caddy/access/{$ACCESS_MODE:open}.caddy" in caddyfile
+    web_env = _compose()["services"]["web"]["environment"]
+    assert {"ACCESS_MODE", "STAGING_BASIC_AUTH_USER", "STAGING_BASIC_AUTH_HASH"} <= set(web_env)
+
+
+def test_backend_container_gets_no_unneeded_secrets_and_drops_privileges():
+    backend = _compose()["services"]["backend"]
+    for key in ("POSTGRES_PASSWORD", "SAP_BRIM_DB_PASSWORD", "STAGING_BASIC_AUTH_HASH"):
+        assert backend["environment"][key] == ""
+    assert "no-new-privileges:true" in backend["security_opt"] and backend["cap_drop"] == ["ALL"]
+
+
+def test_every_service_has_limits_healthchecks_and_pinned_images():
+    services = _compose()["services"]
+    for name in ("postgres", "backend", "web"):
+        limits = services[name]["deploy"]["resources"]["limits"]
+        assert limits["cpus"] and limits["memory"]
+    assert "healthcheck" in services["postgres"] and "healthcheck" in services["web"]
+    assert "HEALTHCHECK" in BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+    assert re.fullmatch(r"pgvector/pgvector:\d+\.\d+\.\d+-pg16", services["postgres"]["image"])
+    for dockerfile in (BACKEND_DOCKERFILE, FRONTEND_DOCKERFILE):
+        for image in re.findall(r"^FROM (\S+)", dockerfile.read_text(encoding="utf-8"), re.MULTILINE):
+            assert re.search(r":\d+\.\d+\.\d+", image), f"{dockerfile.name}: {image} is not pinned"
+
+
+def test_backend_image_installs_the_hashed_lock_without_unused_vulnerable_packages():
+    dockerfile = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+    assert "--require-hashes" in dockerfile and "requirements.lock" in dockerfile
+    lock = LOCK.read_text(encoding="utf-8").lower()
+    pinned = set(re.findall(r"^([a-z0-9_.\-]+)==", lock, re.MULTILINE))
+    for banned in ("python-jose", "ecdsa", "passlib"):
+        assert banned not in pinned
+    assert not any(name.startswith("nvidia-") for name in pinned)
+    wanted = re.findall(r"^([A-Za-z0-9_.\-]+)", (ROOT_DIR / "backend" / "requirements.txt").read_text(encoding="utf-8"),
+                        re.MULTILINE)
+    normalise = lambda n: re.sub(r"[-_.]+", "-", n.lower())
+    assert {normalise(n) for n in wanted} <= {normalise(n) for n in pinned}

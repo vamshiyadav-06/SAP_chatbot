@@ -6,13 +6,75 @@ import threading
 import contextlib
 import contextvars
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, List, Dict, Any, Generator, Optional, Set, Tuple, TypeVar
+from typing import Callable, Iterable, Iterator, List, Dict, Any, Generator, Optional, Set, Tuple, TypeVar
 
 _regeneration_ctx: contextvars.ContextVar[int] = contextvars.ContextVar('regeneration_index', default=0)
 # None outside a request; a dict that set_current_llm_info fills in while an answer is generated.
 _current_llm_info: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar('current_llm_info', default=None)
 # "primary" offers every configured model except LLM_LAST_RESORT_MODELS; "last_resort" offers only those.
 _model_pool: contextvars.ContextVar[str] = contextvars.ContextVar('llm_model_pool', default='primary')
+_request_deadline: contextvars.ContextVar[Optional['RequestDeadline']] = contextvars.ContextVar('llm_request_deadline', default=None)
+
+deadline_clock = time.monotonic
+
+
+class LLMStreamInterrupted(RuntimeError):
+    """A stream failed after generation began; never append another model's answer to it."""
+
+    def __init__(self, message: str = "The model stream was interrupted.", *, category: str = "stream_error"):
+        super().__init__(message)
+        self.category = category
+
+
+class RequestDeadlineExceeded(TimeoutError):
+    """The request-wide generation budget has elapsed."""
+
+
+@dataclass
+class RequestDeadline:
+    seconds: float
+    clock: Optional[Callable[[], float]] = None
+    expires_at: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.clock is None:
+            self.clock = deadline_clock
+        self.expires_at = self.clock() + max(0.0, float(self.seconds))
+
+    def remaining(self) -> float:
+        return max(0.0, self.expires_at - self.clock())
+
+
+@contextlib.contextmanager
+def deadline_scope(deadline: RequestDeadline) -> Iterator[RequestDeadline]:
+    token = _request_deadline.set(deadline)
+    try:
+        yield deadline
+    finally:
+        _request_deadline.reset(token)
+
+
+def _deadline_remaining() -> Optional[float]:
+    deadline = _request_deadline.get()
+    return deadline.remaining() if deadline is not None else None
+
+
+def _request_timeout(default: float) -> float:
+    remaining = _deadline_remaining()
+    if remaining is None:
+        return default
+    if remaining <= 0:
+        raise RequestDeadlineExceeded("LLM request deadline elapsed")
+    return min(float(default), remaining)
+
+
+def _deadline_expired() -> bool:
+    remaining = _deadline_remaining()
+    return remaining is not None and remaining <= 0
+
+
+def current_deadline() -> Optional[RequestDeadline]:
+    return _request_deadline.get()
 
 _T = TypeVar("_T")
 
@@ -59,7 +121,7 @@ def with_generation_context(events: Iterable[_T], regeneration_index: int, llm_i
 from backend.app.config import settings
 from backend.app.services.evidence_markers import strip_markers
 from backend.app.services.data_redaction import redact_external_text
-from backend.app.services import token_meter
+from backend.app.services import languages, token_meter, user_memory
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import (
     AnswerPlan,
@@ -298,6 +360,7 @@ CONVERSATIONAL_SYSTEM_PROMPT = EMOTIONAL_CASUAL_SYSTEM_PROMPT
 GROQ_MAX_OUTPUT_TOKENS = 4096
 GROQ_MIN_OUTPUT_TOKENS = 1024
 UNAVAILABLE_RESPONSE = "I couldn't generate a verified response right now. Please try again later."
+TRUNCATED_ANSWER_NOTICE = "\n\n[The response was cut off. Please ask me to continue.]"
 # Sprint sends this many latest messages word for word; older ones in the 20-message window go as excerpts.
 SPRINT_VERBATIM_MESSAGES = 6
 # Scholar uses the same window: the latest messages word for word (each capped), older ones as excerpts.
@@ -361,13 +424,15 @@ class ModelCooldowns:
     UNKNOWN_MODEL_SECONDS = 3600.0
     AUTH_ERROR_SECONDS = 3600.0
     RATE_LIMIT_SECONDS = 30.0
+    PAYMENT_REQUIRED_SECONDS = 300.0
     TIMEOUT_SECONDS = 60.0
     _ANY_MODEL = "*"
     _AUTH_TERMS = ("invalid api key", "invalid_api_key", "api key not valid", "unauthorized", "authentication",
                    "permission denied", "permissiondenied")
 
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, wall_clock=time.time):
         self._clock = clock
+        self._wall_clock = wall_clock
         self._until: Dict[Tuple[str, str], float] = {}
         self._lock = threading.Lock()
 
@@ -383,8 +448,11 @@ class ModelCooldowns:
         return True
 
     def record_failure(self, provider: str, model: str, error: BaseException) -> None:
+        status = getattr(error, "status_code", None) or getattr(getattr(error, "response", None), "status_code", None)
         if self.is_auth_error(error):
             key, seconds = (provider, self._ANY_MODEL), self.AUTH_ERROR_SECONDS
+        elif status == 402:
+            key, seconds = (provider, self._ANY_MODEL), self.PAYMENT_REQUIRED_SECONDS
         else:
             key, seconds = (provider, model), self._cooldown_seconds(error)
         if seconds:
@@ -403,25 +471,40 @@ class ModelCooldowns:
         response = getattr(error, "response", None)
         status = getattr(error, "status_code", None) or getattr(response, "status_code", None)
         message = f"{type(error).__name__} {error}".lower()
-        return status == 401 or any(term in message for term in cls._AUTH_TERMS)
+        if status == 401:
+            return True
+        if status == 403:
+            return any(term in message for term in ("api key", "credentials", "unauthorized", "authentication"))
+        return status is None and any(term in message for term in cls._AUTH_TERMS)
 
-    @classmethod
-    def _cooldown_seconds(cls, error: BaseException) -> Optional[float]:
+    def _cooldown_seconds(self, error: BaseException) -> Optional[float]:
         response = getattr(error, "response", None)
         status = getattr(error, "status_code", None) or getattr(response, "status_code", None)
         message = f"{type(error).__name__} {error}".lower()
+        if status == 402:
+            return self.PAYMENT_REQUIRED_SECONDS
         if status == 404 or any(term in message for term in ("does not exist", "model not found", "notfound", "decommissioned")):
-            return cls.UNKNOWN_MODEL_SECONDS
+            return self.UNKNOWN_MODEL_SECONDS
         if status == 429 or any(term in message for term in ("rate limit", "ratelimit", "resource exhausted", "resourceexhausted", "quota")):
-            return min(cls.UNKNOWN_MODEL_SECONDS, cls._retry_after(response) or cls.RATE_LIMIT_SECONDS)
+            return min(self.UNKNOWN_MODEL_SECONDS, self._retry_after(response, wall_clock=self._wall_clock) or self.RATE_LIMIT_SECONDS)
         if "timeout" in message or "timed out" in message:
-            return cls.TIMEOUT_SECONDS
+            return self.TIMEOUT_SECONDS
         return None
 
     @staticmethod
-    def _retry_after(response) -> Optional[float]:
+    def _retry_after(response, wall_clock=time.time) -> Optional[float]:
         try:
-            seconds = float((getattr(response, "headers", None) or {}).get("retry-after"))
+            headers = getattr(response, "headers", None) or {}
+            raw = headers.get("retry-after")
+            if raw is None:
+                reset = headers.get("X-RateLimit-Reset") or headers.get("x-ratelimit-reset")
+                if reset is not None:
+                    reset_at = float(reset)
+                    if reset_at > 100_000_000_000:  # providers may express Unix reset time in milliseconds
+                        reset_at /= 1000.0
+                    return max(0.0, reset_at - wall_clock())
+                return None
+            seconds = float(raw)
         except (TypeError, ValueError):
             return None
         return seconds if seconds > 0 else None
@@ -506,6 +589,12 @@ class LLMService:
     def _prepare_external_prompts(self, provider: str, model: str, prompt: str, system_prompt: str):
         safe_prompt, prompt_counts = redact_external_text(prompt)
         safe_system, system_counts = redact_external_text(system_prompt)
+        prompt_limit = max(200, int(getattr(settings, "MAX_PROMPT_CHARS", 60000)) - len(safe_system))
+        if len(safe_prompt) > prompt_limit:
+            marker = "\n[Earlier prompt context trimmed to fit the provider request budget.]\n"
+            keep = max(0, prompt_limit - len(marker))
+            head = keep // 3
+            safe_prompt = safe_prompt[:head] + marker + safe_prompt[-(keep - head):]
         redactions = dict(prompt_counts)
         for key, value in system_counts.items():
             redactions[key] = redactions.get(key, 0) + value
@@ -584,6 +673,10 @@ class LLMService:
         message = f"{type(error).__name__} {error}".lower()
         if ModelCooldowns.is_auth_error(error):
             return "auth_error"
+        response = getattr(error, "response", None)
+        status = getattr(error, "status_code", None) or getattr(response, "status_code", None)
+        if status == 402:
+            return "insufficient_credits"
         if any(term in message for term in ("429", "rate limit", "rate_limit", "quota")):
             return "rate_limited"
         if "timeout" in message or "timed out" in message:
@@ -608,6 +701,8 @@ class LLMService:
                     stream = streamers[provider](prompt, system_prompt)
                     try:
                         first = next(stream, None)
+                    except LLMStreamInterrupted:
+                        raise
                     except Exception as exc:
                         logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
                         continue
@@ -618,8 +713,14 @@ class LLMService:
                     for chunk in stream:
                         yield chunk
                     return
+                except LLMStreamInterrupted:
+                    raise
                 except Exception as exc:
-                    logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
+                    raise LLMStreamInterrupted(category=self._provider_failure_category(exc)) from exc
+                finally:
+                    close = getattr(stream, "close", None)
+                    if close is not None:
+                        close()
 
 
     # =========================================================
@@ -874,6 +975,9 @@ class LLMService:
         extra = f"\n{guidance.strip()}\n" if guidance else ""
 
         memory_sections = []
+        saved_memory = user_memory.prompt_block()
+        if saved_memory:
+            memory_sections.append(saved_memory)
         if summary and summary.strip():
             memory_sections.append(f"CONVERSATION BACKGROUND SUMMARY (Older discussion):\n{_untrusted_block(summary.strip(), 'chat summary')}")
 
@@ -909,7 +1013,7 @@ Answer the user's question using only the evidence above. Omit any part the evid
 - For technical SAP questions, ground technical procedures and architecture strictly in the RETRIEVED EVIDENCE.
 - Conversation history represents previous user questions and dialogue context, NOT authoritative SAP documentation. Distinguish historical user statements from verified SAP technical standards."""
 
-        return f"""USER QUERY:
+        prompt = f"""USER QUERY:
 {query}
 {extra}
 SOURCE TYPE:
@@ -925,6 +1029,33 @@ QUESTION TO ANSWER NOW:
 
 {EVIDENCE_AWARE_ANSWER_INSTRUCTIONS}
 """
+        budget = max(200, int(getattr(settings, "MAX_PROMPT_CHARS", 60000)) - len(SYSTEM_PROMPT))
+        if len(prompt) > budget and memory_block:
+            prompt = prompt.replace(memory_block, "\n")
+            memory_block = "\n"
+        if len(prompt) > budget:
+            excess = len(prompt) - budget
+            evidence_context = evidence_context[:max(0, len(evidence_context) - excess - 100)]
+            evidence_block = f"""RETRIEVED EVIDENCE (each block starts with its evidence ID):
+{evidence_context or 'None found.'}
+"""
+            prompt = f"""USER QUERY:
+{query}
+{extra}
+SOURCE TYPE:
+{source_type.upper()}
+{memory_block}
+{evidence_block}
+QUESTION TO ANSWER NOW:
+{query}
+
+{task_block}
+
+{self._format_guidance(query, evidence, answer_plan)}
+
+{EVIDENCE_AWARE_ANSWER_INSTRUCTIONS}
+"""
+        return prompt
 
     def generate_answer(
         self,
@@ -978,6 +1109,9 @@ QUESTION TO ANSWER NOW:
             "openrouter": self._call_openrouter,
         }
         for tier, provider in enumerate(provider_order, start=1):
+            if _deadline_expired():
+                meta.failure_category = "deadline"
+                return None
             if not getattr(self, f"{provider}_api_key", ""):
                 if meta.failure_category is None:
                     meta.failure_category = "missing_api_key"
@@ -1028,7 +1162,7 @@ QUESTION TO ANSWER NOW:
             return None
         try:
             from groq import Groq
-            client = Groq(api_key=self.groq_api_key, timeout=45.0, max_retries=0)
+            client = Groq(api_key=self.groq_api_key, timeout=_request_timeout(45.0), max_retries=0)
         except Exception as e:
             logger.warning(f"Failed to initialize Groq client for primary retry: {e}")
             return None
@@ -1124,6 +1258,9 @@ QUESTION TO ANSWER NOW:
         retried_with_learned_limit: Set[str] = set()
         position = 0
         while position < len(models):
+            if _deadline_expired():
+                meta.failure_category = "deadline"
+                break
             model = models[position]
             position += 1
             if not model_cooldowns.available("groq", model):
@@ -1143,7 +1280,7 @@ QUESTION TO ANSWER NOW:
                     ],
                     temperature=self.generation_temperature,
                     **output_args,
-                    timeout=45.0
+                    timeout=_request_timeout(45.0)
                 )
                 if response.choices and response.choices[0].message and response.choices[0].message.content:
                     finish_reason = getattr(response.choices[0], "finish_reason", None) or "stop"
@@ -1171,13 +1308,17 @@ QUESTION TO ANSWER NOW:
                         logger.info(f"[LLM] Generation completed in {_elapsed_ms}ms | Provider: groq | Model: {model}{usage_info} | Status: completed")
                         return content
                     else:
-                        logger.warning(f"[Tier 1: Groq] Model '{model}' returned empty content. Trying next model...")
+                        meta.failure_category = "empty_response"
+                        logger.warning("[Tier 1: Groq] Model '%s' returned empty content (empty_response). Trying next model...", model)
                         continue
                 else:
-                    meta.failure_category = "invalid_response"
-                    logger.warning(f"[Tier 1: Groq] Model '{model}' returned no choices. Trying next model...")
+                    meta.failure_category = "empty_response"
+                    logger.warning("[Tier 1: Groq] Model '%s' returned no choices (empty_response). Trying next model...", model)
                     continue
             except Exception as err:
+                if _deadline_expired() or isinstance(err, RequestDeadlineExceeded):
+                    meta.failure_category = "deadline"
+                    break
                 if model not in retried_with_learned_limit and self._learn_groq_limit(model, str(err)):
                     # 413 "request too large": the real per-minute limit is lower than configured. Retry this
                     # model once with a correctly sized output reservation instead of handing over to a weaker one.
@@ -1189,11 +1330,14 @@ QUESTION TO ANSWER NOW:
                 meta.failure_category = self._provider_failure_category(err)
                 model_cooldowns.record_failure("groq", model, err)
                 err_str = str(err)
+                response = getattr(err, "response", None)
+                status_code = getattr(err, "status_code", None) or getattr(response, "status_code", None)
                 # Skip known Groq errors for invalid/unsupported models gracefully
-                if "model output" in err_str.lower() or "model not found" in err_str.lower() or "does not exist" in err_str.lower() or "404" in err_str:
-                    logger.warning(f"[Tier 1: Groq] Model '{model}' is unavailable ({err_str[:120]}). Skipping.")
+                if status_code == 404 or "model output" in err_str.lower() or "model not found" in err_str.lower() or "does not exist" in err_str.lower():
+                    logger.warning("[Tier 1: Groq] Model '%s' is unavailable (status=%s). Skipping.", model, status_code or "unknown")
                 else:
-                    logger.warning(f"[Tier 1: Groq] Model '{model}' failed ({err_str[:120]}). Trying next model...")
+                    logger.warning("[Tier 1: Groq] Model '%s' failed (%s, status=%s). Trying next model...",
+                                   model, type(err).__name__, status_code or "unknown")
                 continue
 
         logger.warning("[Tier 1: Groq] All Groq models exhausted.")
@@ -1297,12 +1441,12 @@ QUESTION TO ANSWER NOW:
                 ],
                 temperature=self.generation_temperature,
                 max_tokens=8192,
-                timeout=45.0
+                timeout=_request_timeout(45.0)
             )
             if response.choices and response.choices[0].message and response.choices[0].message.content:
                 return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.warning(f"[Tier 3: OpenRouter] Continuation failed: {e}")
+            logger.warning("[Tier 3: OpenRouter] Continuation failed (%s).", type(e).__name__)
         return None
 
     @token_meter.meter_reply
@@ -1323,6 +1467,9 @@ QUESTION TO ANSWER NOW:
             return None
 
         for model_name in self._get_models("gemini", regeneration_index=regeneration_index):
+            if _deadline_expired():
+                meta.failure_category = "deadline"
+                break
             if not model_cooldowns.available("gemini", model_name):
                 continue
             try:
@@ -1341,7 +1488,7 @@ QUESTION TO ANSWER NOW:
                         temperature=self.generation_temperature,
                         max_output_tokens=8192
                     ),
-                    request_options={"timeout": 45.0}
+                    request_options={"timeout": _request_timeout(45.0)}
                 )
                 finish_reason = "stop"
                 if response and response.candidates:
@@ -1360,6 +1507,11 @@ QUESTION TO ANSWER NOW:
                             content = content + "\n\n" + continued
                             meta.was_continued, meta.is_truncated = True, False
                         else:
+                            kept = _complete_paragraphs(content)
+                            if len(kept) < GROQ_MIN_KEPT_ANSWER_CHARS:
+                                meta.is_truncated = True
+                                continue
+                            content = kept
                             meta.is_truncated = True
                     else:
                         meta.is_truncated = meta.was_continued = False
@@ -1380,6 +1532,9 @@ QUESTION TO ANSWER NOW:
                         logger.info(f"[LLM] Generation completed in {_elapsed_ms}ms | Provider: gemini | Model: {model_name}{usage_info} | Status: completed")
                         return content
             except Exception as err:
+                if _deadline_expired() or isinstance(err, RequestDeadlineExceeded):
+                    meta.failure_category = "deadline"
+                    break
                 meta.failure_category = self._provider_failure_category(err)
                 model_cooldowns.record_failure("gemini", model_name, err)
                 logger.warning(f"[Tier 2: Gemini] Model '{model_name}' failed ({err}). Trying next model...")
@@ -1397,12 +1552,15 @@ QUESTION TO ANSWER NOW:
         meta = result if result is not None else GenerationResult()
         if not self._provider_enabled("openrouter") or not self.openrouter_api_key:
             return None
+        if _deadline_expired():
+            meta.failure_category = "deadline"
+            return None
         try:
             from openai import OpenAI
             client = OpenAI(
                 api_key=self.openrouter_api_key,
-                base_url="https://openrouter.ai/api/v1",
-                timeout=45.0,
+                base_url=getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+                timeout=_request_timeout(45.0),
                 max_retries=0,
                 default_headers={
                     "HTTP-Referer": "https://clyptus.ai",
@@ -1415,6 +1573,9 @@ QUESTION TO ANSWER NOW:
             return None
 
         for model in self._get_models("openrouter", regeneration_index=regeneration_index):
+            if _deadline_expired():
+                meta.failure_category = "deadline"
+                break
             if not model_cooldowns.available("openrouter", model):
                 continue
             try:
@@ -1431,7 +1592,7 @@ QUESTION TO ANSWER NOW:
                     ],
                     temperature=self.generation_temperature,
                     max_tokens=8192,
-                    timeout=45.0
+                    timeout=_request_timeout(45.0)
                 )
                 if response.choices and response.choices[0].message and response.choices[0].message.content:
                     finish_reason = getattr(response.choices[0], "finish_reason", None) or "stop"
@@ -1442,9 +1603,16 @@ QUESTION TO ANSWER NOW:
                         logger.warning(f"[LLM WARNING] OpenRouter model '{model}' truncated by max_tokens. Attempting continuation...")
                         continued = self._continue_openrouter(client, model, safe_system_prompt, safe_prompt, content)
                         if continued:
-                            content = content + "\n\n" + continued
+                            separator = "" if content.endswith((" ", "\n")) else " "
+                            content = content + separator + continued
                             meta.was_continued, meta.is_truncated = True, False
                         else:
+                            kept = _complete_paragraphs(content)
+                            if len(kept) < 100:
+                                meta.is_truncated = True
+                                logger.warning("[Tier 3: OpenRouter] Model '%s' had no usable continuation; trying next model.", model)
+                                continue
+                            content = kept
                             meta.is_truncated = True
                     else:
                         meta.is_truncated = meta.was_continued = False
@@ -1463,10 +1631,23 @@ QUESTION TO ANSWER NOW:
                             usage_info = f" | Tokens (est_in={meta.estimated_input_tokens}, max_out={meta.max_output_tokens})"
                         logger.info(f"[LLM] Generation completed in {_elapsed_ms}ms | Provider: openrouter | Model: {model}{usage_info} | Status: completed")
                         return content
+                    meta.failure_category = "empty_response"
+                    logger.warning("[Tier 3: OpenRouter] Model '%s' returned an empty response (empty_response). Trying next model...", model)
+                    continue
+                else:
+                    meta.failure_category = "empty_response"
+                    logger.warning("[Tier 3: OpenRouter] Model '%s' returned an empty response (empty_response). Trying next model...", model)
+                    continue
             except Exception as err:
+                if _deadline_expired() or isinstance(err, RequestDeadlineExceeded):
+                    meta.failure_category = "deadline"
+                    break
                 meta.failure_category = self._provider_failure_category(err)
                 model_cooldowns.record_failure("openrouter", model, err)
-                logger.warning(f"[Tier 3: OpenRouter] Model '{model}' failed ({err}). Trying next model...")
+                response = getattr(err, "response", None)
+                status_code = getattr(err, "status_code", None) or getattr(response, "status_code", None)
+                logger.warning("[Tier 3: OpenRouter] Model '%s' failed (%s, status=%s, category=%s). Trying next model...",
+                               model, type(err).__name__, status_code or "unknown", meta.failure_category)
                 continue
 
         logger.warning("[Tier 3: OpenRouter] All OpenRouter models exhausted.")
@@ -1610,6 +1791,12 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             entry for item in older if (entry := conversation_memory_service.summary_entry(item["role"], item["content"]))
         ]
         prompt_parts = []
+        saved_memory = user_memory.prompt_block()
+        if saved_memory:
+            prompt_parts.append(saved_memory)
+        language_block = languages.prompt_block()
+        if language_block:
+            prompt_parts.append(language_block)
         if summary_lines:
             prompt_parts.append(
                 "Summary of older messages in this conversation:\n"
@@ -1627,7 +1814,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             )
 
         attachment_parts = []
-        remaining = 30000
+        remaining = max(0, int(getattr(settings, "MAX_ATTACHMENT_PROMPT_CHARS", 24000)))
         for item in attachments or []:
             text = str(item.get("text") or "")[:remaining]
             if not text:
@@ -1642,8 +1829,15 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         if attachment_parts:
             prompt_parts.append("User-provided attachment context:\n" + "\n\n".join(attachment_parts))
 
-        prompt_parts.append(f"Current SAP question:\n{query.strip()}")
-        return "\n\n".join(prompt_parts)
+        question = f"Current SAP question:\n{query.strip()}"
+        prompt_parts.append(question)
+        prompt = "\n\n".join(prompt_parts)
+        budget = max(200, int(getattr(settings, "MAX_PROMPT_CHARS", 60000)) - len(SPRINT_SYSTEM_PROMPT))
+        if len(prompt) > budget:
+            context = prompt[:-len(question) - 2]
+            available = max(0, budget - len(question) - 2)
+            prompt = context[-available:] + "\n\n" + question if available else question
+        return prompt
 
     def generate_sprint_reply(
         self,
@@ -1670,16 +1864,21 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         """Generate directly from configured LLM providers, without retrieval or grounding."""
         prompt = self._build_sprint_prompt(query, chat_history, attachments, summary, recalled_messages)
         emitted = False
-        try:
-            for chunk in self._stream_configured(prompt, SPRINT_SYSTEM_PROMPT, regeneration_index=regeneration_index):
-                emitted = True
-                yield chunk
-        except Exception as exc:
-            logger.warning("Sprint answer streaming failed (%s)", type(exc).__name__)
-        if emitted:
-            return
-        answer = self.generate_completion(prompt, SPRINT_SYSTEM_PROMPT)
-        yield answer.strip() if answer else UNAVAILABLE_RESPONSE
+        seconds = max(1.0, float(getattr(settings, "LLM_REQUEST_DEADLINE_SECONDS", 90)))
+        with deadline_scope(RequestDeadline(seconds=seconds)):
+            try:
+                for chunk in self._stream_configured(prompt, SPRINT_SYSTEM_PROMPT, regeneration_index=regeneration_index):
+                    emitted = True
+                    yield chunk
+            except LLMStreamInterrupted as exc:
+                if not emitted and getattr(exc, "category", None) == "deadline":
+                    yield UNAVAILABLE_RESPONSE
+                    return
+                raise
+            except Exception as exc:
+                logger.warning("Sprint answer streaming failed (%s)", type(exc).__name__)
+        if not emitted:
+            yield UNAVAILABLE_RESPONSE
 
     # =========================================================
     # PATH A: EMOTIONAL & CASUAL DIRECT LLM ROUTING
@@ -1853,14 +2052,18 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             return
         try:
             from groq import Groq
-            client = Groq(api_key=self.groq_api_key, timeout=60.0, max_retries=1)
+            client = Groq(api_key=self.groq_api_key, timeout=_request_timeout(60.0), max_retries=0)
         except Exception as e:
-            logger.warning(f"[Tier 1: Groq] Stream client init failed: {e}")
+            logger.warning("[Tier 1: Groq] Stream client init failed (%s)", type(e).__name__)
             return
 
         for model in self._get_models("groq", regeneration_index=regeneration_index):
+            if _deadline_expired():
+                raise LLMStreamInterrupted(category="deadline")
             if not model_cooldowns.available("groq", model):
                 continue
+            yielded_any = False
+            resp = None
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("groq", model, prompt, system_prompt)
                 logger.info(f"[LLM] Streaming started | Provider: groq | Model: {model} | Status: streaming")
@@ -1874,14 +2077,33 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     temperature=self.generation_temperature,
                     **self._groq_output_args(model, safe_system_prompt, safe_prompt),
                     stream=True,
-                    timeout=60.0
+                    timeout=_request_timeout(60.0)
                 )
                 yielded_any = False
+                partial_text = ""
+                finish_reason = None
                 for chunk in resp:
-                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        yielded_any = True
-                        yield chunk.choices[0].delta.content
+                    if _deadline_expired():
+                        raise LLMStreamInterrupted(category="deadline")
+                    if chunk.choices:
+                        choice = chunk.choices[0]
+                        if getattr(choice, "finish_reason", None):
+                            finish_reason = choice.finish_reason
+                        content = getattr(getattr(choice, "delta", None), "content", None)
+                        # Whitespace-only chunks (newlines) carry the Markdown line breaks; drop them only
+                        # before the first visible text.
+                        if content and (content.strip() or yielded_any):
+                            yielded_any = True
+                            partial_text += content
+                            yield content
                 if yielded_any:
+                    if finish_reason == "length":
+                        continuation = self._continue_groq(client, model, safe_system_prompt, safe_prompt, partial_text)
+                        if continuation:
+                            separator = "" if partial_text.endswith((" ", "\n")) else " "
+                            yield separator + continuation
+                        else:
+                            yield TRUNCATED_ANSWER_NOTICE
                     _stream_ms = round((time.perf_counter() - _stream_start) * 1000, 1)
                     set_current_llm_info("groq", model)
                     logger.info(f"[LLM] Streaming completed in {_stream_ms}ms | Provider: groq | Model: {model} | Status: completed")
@@ -1892,12 +2114,23 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             except Exception as err:
                 self._learn_groq_limit(model, str(err))
                 model_cooldowns.record_failure("groq", model, err)
+                if isinstance(err, LLMStreamInterrupted):
+                    raise
+                if yielded_any:
+                    raise LLMStreamInterrupted(category=self._provider_failure_category(err)) from err
                 err_str = str(err)
                 if "model output" in err_str.lower() or "model not found" in err_str.lower() or "does not exist" in err_str.lower() or "404" in err_str:
                     logger.warning(f"[Tier 1: Groq] Streaming model '{model}' unavailable ({err_str[:120]}). Skipping.")
                 else:
-                    logger.warning(f"[Tier 1: Groq] Streaming model '{model}' failed ({err_str[:120]}). Trying next model...")
+                    logger.warning("[Tier 1: Groq] Streaming model failed (%s). Trying next model...", type(err).__name__)
                 continue
+            finally:
+                close = getattr(resp, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:
+                        pass
 
     @token_meter.meter_reply
     def _stream_gemini(self, prompt: str, system_prompt: str, regeneration_index: Optional[int] = None) -> Generator[str, None, None]:
@@ -1912,8 +2145,12 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             return
 
         for model_name in self._get_models("gemini", regeneration_index=regeneration_index):
+            if _deadline_expired():
+                raise LLMStreamInterrupted(category="deadline")
             if not model_cooldowns.available("gemini", model_name):
                 continue
+            yielded_any = False
+            stream_resp = None
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("gemini", model_name, prompt, system_prompt)
                 logger.info(f"[LLM] Streaming started | Provider: gemini | Model: {model_name} | Status: streaming")
@@ -1928,14 +2165,18 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                         temperature=self.generation_temperature,
                         max_output_tokens=8192
                     ),
-                    request_options={"timeout": 60.0},
+                    request_options={"timeout": _request_timeout(60.0)},
                     stream=True
                 )
                 yielded_any = False
+                partial_text = ""
                 for chunk in stream_resp:
+                    if _deadline_expired():
+                        raise LLMStreamInterrupted(category="deadline")
                     try:
-                        if chunk.text:
+                        if chunk.text and (chunk.text.strip() or yielded_any):
                             yielded_any = True
+                            partial_text += chunk.text
                             yield chunk.text
                     except Exception:
                         continue
@@ -1946,21 +2187,34 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     return
             except Exception as err:
                 model_cooldowns.record_failure("gemini", model_name, err)
-                logger.warning(f"[Tier 2: Gemini] Streaming model '{model_name}' failed ({err}). Trying next model...")
+                if isinstance(err, LLMStreamInterrupted):
+                    raise
+                if yielded_any:
+                    raise LLMStreamInterrupted(category=self._provider_failure_category(err)) from err
+                logger.warning("[Tier 2: Gemini] Streaming model failed (%s). Trying next model...", type(err).__name__)
                 continue
+            finally:
+                close = getattr(stream_resp, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:
+                        pass
 
     @token_meter.meter_reply
     def _stream_openrouter(self, prompt: str, system_prompt: str, regeneration_index: Optional[int] = None) -> Generator[str, None, None]:
         """Tier 3: Progressive streaming via OpenRouter."""
         if not self._provider_enabled("openrouter") or not self.openrouter_api_key:
             return
+        if _deadline_expired():
+            raise LLMStreamInterrupted(category="deadline")
         try:
             from openai import OpenAI
             client = OpenAI(
                 api_key=self.openrouter_api_key,
-                base_url="https://openrouter.ai/api/v1",
-                timeout=60.0,
-                max_retries=1,
+                base_url=getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+                timeout=_request_timeout(60.0),
+                max_retries=0,
                 default_headers={
                     "HTTP-Referer": "https://clyptus.ai",
                     "X-Title": "Clyptus.AI"
@@ -1971,12 +2225,18 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             return
 
         for model in self._get_models("openrouter", regeneration_index=regeneration_index):
+            if _deadline_expired():
+                raise LLMStreamInterrupted(category="deadline")
             if not model_cooldowns.available("openrouter", model):
                 continue
+            resp = None
+            yielded_any = False
+            partial_text = ""
+            finish_reason = None
+            started = time.perf_counter()
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("openrouter", model, prompt, system_prompt)
                 logger.info(f"[LLM] Streaming started | Provider: openrouter | Model: {model} | Status: streaming")
-                _stream_start = time.perf_counter()
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -1985,23 +2245,53 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     ],
                     temperature=self.generation_temperature,
                     max_tokens=8192,
-                    timeout=60.0,
+                    timeout=_request_timeout(60.0),
                     stream=True
                 )
-                yielded_any = False
                 for chunk in resp:
-                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        yielded_any = True
-                        yield chunk.choices[0].delta.content
+                    if _deadline_expired():
+                        raise LLMStreamInterrupted(category="deadline")
+                    choice = chunk.choices[0] if getattr(chunk, "choices", None) else None
+                    if choice is not None and getattr(choice, "finish_reason", None) is not None:
+                        finish_reason = choice.finish_reason
+                    if choice is not None and getattr(choice, "delta", None) and choice.delta.content:
+                        text = choice.delta.content
+                        if text.strip() or yielded_any:
+                            yielded_any = True
+                            partial_text += text
+                            yield text
+                if yielded_any and finish_reason is None:
+                    raise LLMStreamInterrupted(category="stream_incomplete")
+                if yielded_any and finish_reason == "length":
+                    continuation = self._continue_openrouter(client, model, safe_system_prompt, safe_prompt, partial_text)
+                    if continuation:
+                        separator = "" if partial_text.endswith((" ", "\n")) else " "
+                        yield separator + continuation
+                    else:
+                        yield TRUNCATED_ANSWER_NOTICE
                 if yielded_any:
-                    _stream_ms = round((time.perf_counter() - _stream_start) * 1000, 1)
+                    _stream_ms = round((time.perf_counter() - started) * 1000, 1)
                     set_current_llm_info("openrouter", model)
                     logger.info(f"[LLM] Streaming completed in {_stream_ms}ms | Provider: openrouter | Model: {model} | Status: completed")
                     return
+            except LLMStreamInterrupted:
+                raise
             except Exception as err:
+                if yielded_any:
+                    raise LLMStreamInterrupted(category=self._provider_failure_category(err)) from err
+                if _deadline_expired() or isinstance(err, RequestDeadlineExceeded):
+                    raise LLMStreamInterrupted(category="deadline") from err
                 model_cooldowns.record_failure("openrouter", model, err)
-                logger.warning(f"[Tier 3: OpenRouter] Streaming model '{model}' failed ({err}). Trying next model...")
+                logger.warning("[Tier 3: OpenRouter] Streaming model '%s' failed (%s, category=%s). Trying next model...",
+                               model, type(err).__name__, self._provider_failure_category(err))
                 continue
+            finally:
+                close = getattr(resp, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:
+                        pass
 
     def stream_answer(
         self,
@@ -2023,6 +2313,14 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             query, evidence, source_type, guidance, answer_plan,
             chat_history=chat_history, historical_memory=historical_memory, summary=summary
         )
+        if current_deadline() is None:
+            seconds = max(1.0, float(getattr(settings, "LLM_REQUEST_DEADLINE_SECONDS", 120)))
+            with deadline_scope(RequestDeadline(seconds=seconds)):
+                yield from self.stream_answer(
+                    query, evidence, source_type, guidance, answer_plan, chat_history,
+                    historical_memory, summary, result, regeneration_index,
+                )
+            return
         streamers = {
             "groq": self._stream_groq,
             "gemini": self._stream_gemini,
@@ -2051,6 +2349,8 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     meta.provider = provider
                     return
             except Exception as exc:
+                if isinstance(exc, LLMStreamInterrupted) or emitted:
+                    raise LLMStreamInterrupted(category=getattr(exc, "category", self._provider_failure_category(exc))) from exc
                 meta.failure_category = self._provider_failure_category(exc)
                 logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
 

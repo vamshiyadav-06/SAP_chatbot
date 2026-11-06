@@ -24,10 +24,16 @@ from backend.app.services.rag_service import rag_service
 # 1. FEATURE FLAGS & OPERATING MODES TESTS
 # ==============================================================================
 
-def test_feature_flags_default_to_false():
-    """Verify non-negotiable requirement: both feature flags default to False."""
-    assert settings.REPO_SOURCE_ENABLED is False
-    assert settings.MULTI_SOURCE_COMPARE_ENABLED is False
+def test_feature_flags_default_to_false(monkeypatch):
+    """Verify non-negotiable requirement: both feature flags default to False.
+
+    Checks the code defaults, not the developer's .env (which may enable them) or the environment."""
+    from backend.app.config import Settings
+    monkeypatch.delenv("REPO_SOURCE_ENABLED", raising=False)
+    monkeypatch.delenv("MULTI_SOURCE_COMPARE_ENABLED", raising=False)
+    defaults = Settings(_env_file=None)
+    assert defaults.REPO_SOURCE_ENABLED is False
+    assert defaults.MULTI_SOURCE_COMPARE_ENABLED is False
 
 
 def test_flag_interaction_safety():
@@ -267,7 +273,10 @@ def test_comparator_kb_wins_when_strongest():
             "page_number": 45,
             "chunk_text": "Official SAP Convergent Invoicing documentation on billable items.",
             "score": 0.92,
-            "rerank_score": 0.90
+            "rerank_score": 0.90,
+            # retrieval_service attaches the document's persisted source tier; without it the comparator
+            # treats an unclassified document as self_authored (lowest authority).
+            "provenance_tier": "official_sap",
         }
     ]
     with patch("backend.app.retrieval.multi_source_compare.repo_store.search_repo_chunks") as mock_repo, \
@@ -307,7 +316,8 @@ def test_comparator_authority_weighting_ranks_official_over_repo():
             "page_number": 10,
             "chunk_text": "Official SAP description of provider contract.",
             "score": 0.82,
-            "rerank_score": 0.82
+            "rerank_score": 0.82,
+            "provenance_tier": "official_sap",
         }
     ]
     with patch("backend.app.retrieval.multi_source_compare.repo_store.search_repo_chunks") as mock_repo, \
@@ -333,6 +343,19 @@ def test_comparator_authority_weighting_ranks_official_over_repo():
         )
         assert res["comparison"]["winning_source_type"] == "knowledge_base"
         assert res["comparison"]["winning_candidate_id"] == "kb-1"
+
+
+def test_comparator_unclassified_kb_document_gets_the_lowest_document_authority():
+    """A KB candidate without a tier whose name is not in the tier mapping is weighted as self_authored,
+    so an unreviewed upload can never outrank classified evidence on authority alone."""
+    candidate = MultiSourceComparator().normalize_candidate(
+        {"chunk_id": "kb-x", "document_name": "Unreviewed_upload.pdf", "chunk_text": "text", "score": 0.9},
+        "knowledge_base",
+        "q",
+    )
+    assert candidate["provenance"] == "self_authored"
+    assert candidate["source_authority"] == 0.6
+    assert candidate["final_score"] == round(0.9 * 0.6, 4)
 
 
 def test_comparator_insufficient_evidence_when_below_threshold():

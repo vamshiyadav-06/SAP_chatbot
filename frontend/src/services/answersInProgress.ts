@@ -15,11 +15,15 @@ type Listener = (chatId: string) => void;
 
 const running = new Map<string, AnswerInProgress>();
 const failures = new Map<string, string>();
+// Chats whose latest answer ended (arrived, failed or was stopped) while this page was open. After a page
+// reload this is empty, which is how the chat page tells a reload apart from a same-session visit.
+const ended = new Set<string>();
 const listeners = new Set<Listener>();
 
 export const answersInProgress = {
   start(chatId: string, abort: () => void): void {
     running.set(chatId, { streamId: null, text: '', abort });
+    ended.delete(chatId);
   },
 
   setStreamId(chatId: string, streamId: string): void {
@@ -42,6 +46,7 @@ export const answersInProgress = {
 
   /** The answer arrived (or failed): forget it and tell whoever shows that chat. */
   finish(chatId: string, failure?: string): void {
+    if (chatId) ended.add(chatId);
     if (!running.delete(chatId)) return;
     if (failure) failures.set(chatId, failure);
     listeners.forEach((listener) => listener(chatId));
@@ -59,6 +64,7 @@ export const answersInProgress = {
     const entry = running.get(chatId);
     if (!entry) return undefined;
     running.delete(chatId);
+    ended.add(chatId);
     entry.abort();
     return entry;
   },
@@ -66,6 +72,17 @@ export const answersInProgress = {
   /** Forget an answer without telling anyone (the visible Stop button saves it itself). */
   remove(chatId: string): void {
     running.delete(chatId);
+    ended.add(chatId);
+  },
+
+  /** An answer ended before it was tracked here (e.g. it failed before the server sent a stream id). */
+  markEnded(chatId: string): void {
+    if (chatId) ended.add(chatId);
+  },
+
+  /** The chat's latest answer ended while this page was open (so nothing is still generating for it). */
+  endedHere(chatId: string | undefined): boolean {
+    return Boolean(chatId && ended.has(chatId));
   },
 
   subscribe(listener: Listener): () => void {
@@ -79,6 +96,7 @@ export const answersInProgress = {
   reset(): void {
     running.clear();
     failures.clear();
+    ended.clear();
     listeners.clear();
   },
 };

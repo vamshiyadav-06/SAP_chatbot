@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from backend.app.config import settings
 from backend.app.retrieval.source_registry import hostname_matches
+from backend.app.security.log_safety import privacy_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +233,11 @@ def build_report(
 
 
 def log_report(report: Dict[str, Any], query: str) -> None:
-    """Structured server-side audit line (never sent to ordinary users)."""
+    """Structured server-side audit line (never sent to ordinary users). The question is identified by a
+    fingerprint and its length only: prompt text stays out of the logs."""
     logger.info(
-        "answer_validation decision=%s overall=%.3f gate=%s critical=%d components=%s query=%r",
+        "answer_validation decision=%s overall=%.3f gate=%s critical=%d components=%s query_hash=%s query_length=%d",
         report.get("decision"), report.get("overall_confidence", 0.0), report.get("passes_grounding_gate"),
-        len(report.get("critical_failures") or []), report.get("components"), (query or "")[:120],
+        len(report.get("critical_failures") or []), report.get("components"),
+        privacy_fingerprint(query or ""), len(query or ""),
     )

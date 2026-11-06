@@ -240,8 +240,14 @@ def test_authority_domain_matching_rejects_lookalike_hostnames():
 # 5. FEATURE FLAG DEFAULT SAFETY TEST
 # ==============================================================================
 
-def test_web_sources_feature_flag_defaults_to_false():
-    """Verify non-negotiable requirement: new web sources feature flag defaults to False."""
-    assert settings.SAP_WEB_SOURCES_ENABLED is False
-    assert settings.REPO_SOURCE_ENABLED is False
-    assert settings.MULTI_SOURCE_COMPARE_ENABLED is False
+def test_web_sources_feature_flag_defaults_to_false(monkeypatch):
+    """Verify non-negotiable requirement: new web sources feature flag defaults to False.
+
+    Checks the code defaults, not the developer's .env (which may enable them) or the environment."""
+    from backend.app.config import Settings
+    for name in ("SAP_WEB_SOURCES_ENABLED", "REPO_SOURCE_ENABLED", "MULTI_SOURCE_COMPARE_ENABLED"):
+        monkeypatch.delenv(name, raising=False)
+    defaults = Settings(_env_file=None)
+    assert defaults.SAP_WEB_SOURCES_ENABLED is False
+    assert defaults.REPO_SOURCE_ENABLED is False
+    assert defaults.MULTI_SOURCE_COMPARE_ENABLED is False

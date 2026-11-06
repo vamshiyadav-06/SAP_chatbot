@@ -8,6 +8,7 @@ import type { Message, MessageFeedback } from '../../types';
 import { GroundingScoreBadge } from './GroundingScoreBadge';
 import { SourceTypeBadge } from './SourceTypeBadge';
 import { TokenMeterBadge } from './TokenMeterBadge';
+import type { TokenWallet } from './TokenBalance';
 import { CitationModal } from './CitationModal';
 import { SharePromptModal } from './SharePromptModal';
 import { isStoredMessage, toSpeechText } from './messageUtils';
@@ -33,6 +34,8 @@ interface ChatMessageProps {
   orgSharedIds?: ReadonlySet<string>;
   /** Called after an answer was shared to the organisation (or the server said it already was). */
   onOrgShared?: (messageId: string) => void;
+  /** The token wallet after this answer; passed on the latest answer only, shown beside its tokens-used badge. */
+  tokenWallet?: TokenWallet | null;
 }
 
 const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
@@ -82,6 +85,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onRegenerate,
   orgSharedIds,
   onOrgShared,
+  tokenWallet,
 }) => {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<MessageFeedback | null>(message.feedback ?? null);
@@ -282,7 +286,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
               {!isUser && (
                 <div className="flex h-6 shrink-0 items-center">
-                  <TokenMeterBadge streaming={isStreaming} usage={message.token_usage} />
+                  <TokenMeterBadge streaming={isStreaming} usage={message.token_usage} wallet={tokenWallet} />
                 </div>
               )}
             </div>

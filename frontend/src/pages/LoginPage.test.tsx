@@ -26,6 +26,9 @@ describe('LoginPage', () => {
     expect(visual).toBeGreaterThan(-1);
     expect(form).toBeGreaterThan(visual);
     expect(html).toMatch(/<svg class="auth-visual-art"[^>]*role="img"[^>]*aria-label="SAP BRIM flow/);
+    // The answer card in the artwork is filled with SAP BRIM text, not empty placeholder bars.
+    expect(html).toContain('captures the subscription order');
+    expect(html).toContain('posts it to the ledger');
   });
 
   it('shows a security shield followed by a quotation instead of the old session notice', () => {
@@ -63,32 +66,33 @@ describe('LoginPage', () => {
     expect(tagFor(html, 'auth-email')).toContain('autoComplete="username"');
     expect(tagFor(html, 'auth-password')).toContain('autoComplete="current-password"');
     expect(html).toContain('aria-label="Show password"');
-    expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Sign In</);
+    expect(html).not.toContain('auth-tabs');
   });
 
-  it('applies the backend password rules when creating an account', () => {
+  it('keeps individual registration hidden even when its old deep link is opened', () => {
     const html = render('/login?mode=register');
     const password = tagFor(html, 'auth-password');
 
-    expect(password).toContain('minLength="8"');
-    expect(password).toContain('maxLength="72"');
-    expect(password).toContain('autoComplete="new-password"');
-    expect(html).toContain('8–72 characters.');
-    expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Create Account</);
+    expect(password).not.toContain('minLength="8"');
+    expect(password).not.toContain('autoComplete="new-password"');
+    expect(html).not.toContain('auth-password-hint');
+    expect(html).not.toContain('Create Account');
+    expect(html).toMatch(/<h1>Welcome back<\/h1>/);
   });
 
   it('after sign-up, shows the Sign In tab with an "Account created" note', () => {
     const html = render('/login?mode=login&created=1');
 
-    expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Sign In</);
+    expect(html).not.toContain('auth-tabs');
     expect(html).toMatch(/<p[^>]*role="status"[^>]*>[^<]*Account created\. Please sign in\./);
     expect(render('/login?mode=login')).not.toContain('Account created');
   });
 
-  it('lets individuals create an account without any code (codes are for organisations only)', () => {
+  it('does not render a public account creation form', () => {
     const html = render('/login?mode=register');
 
     expect(html).not.toContain('auth-invite');
     expect(html).not.toMatch(/invite code/i);
+    expect(html).not.toContain('Create account');
   });
 });

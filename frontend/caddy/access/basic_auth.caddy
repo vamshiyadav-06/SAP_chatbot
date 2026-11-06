@@ -1,0 +1,11 @@
+# ACCESS_MODE=basic_auth: staging gate. Require HTTP basic auth for every route except the minimal
+# health probe. This also protects sign-in, token refresh, registration, and all API routes uniformly.
+#
+# STAGING_BASIC_AUTH_USER / STAGING_BASIC_AUTH_HASH come from .env; create the hash with
+#   docker run --rm caddy:2.11.7-alpine caddy hash-password --plaintext '<password>'
+@staging_gate {
+	not path /health
+}
+basic_auth @staging_gate {
+	{$STAGING_BASIC_AUTH_USER} {$STAGING_BASIC_AUTH_HASH}
+}

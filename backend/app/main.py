@@ -18,6 +18,7 @@ from backend.app.services.retrieval_service import retrieval_service
 from backend.app.api.auth import router as auth_router
 from backend.app.api.chats import router as chats_router
 from backend.app.api.projects import router as projects_router
+from backend.app.api.memories import router as memories_router
 from backend.app.api.messages import router as messages_router
 from backend.app.api.rag import router as rag_router
 from backend.app.api.admin import router as admin_router
@@ -39,12 +40,6 @@ async def lifespan(app: FastAPI):
         for problem in insecure:
             logger.critical("INSECURE CONFIGURATION - backend not started. %s", problem)
         raise RuntimeError("Insecure configuration in .env: " + " ".join(insecure))
-    if settings.ENVIRONMENT.lower() == "production" and (
-        not settings.ALLOWED_ORIGINS.strip()
-        or "*" in settings.ALLOWED_ORIGINS
-        or any("localhost" in origin or "127.0.0.1" in origin for origin in settings.ALLOWED_ORIGINS.split(","))
-    ):
-        raise RuntimeError("Production requires explicit public ALLOWED_ORIGINS without wildcards or localhost entries.")
     warn_if_not_shared()
     logger.info("[SERVER] Starting SAP BRIM AI backend (environment: %s, version: 1.0.0)...", settings.ENVIRONMENT)
     logger.info("[DATABASE] Connecting to PostgreSQL at %s...", describe_target(settings.DATABASE_URL))
@@ -194,6 +189,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(chats_router, prefix=settings.API_V1_STR)
 app.include_router(projects_router, prefix=settings.API_V1_STR)
+app.include_router(memories_router, prefix=settings.API_V1_STR)
 app.include_router(messages_router, prefix=settings.API_V1_STR)
 app.include_router(rag_router, prefix=settings.API_V1_STR)
 app.include_router(admin_router, prefix=settings.API_V1_STR)

@@ -97,7 +97,8 @@ def test_path_a_greetings_bypass_retrieval(db_session):
 
         # Attributes verification
         assert result["route"] == QueryRoute.EMOTIONAL_CASUAL.value
-        assert result["source_type"] == "direct_llm"
+        # Greetings/emotional replies are "conversational": the UI badge and source hiding key on it.
+        assert result["source_type"] == "conversational"
         assert result["is_in_rag_pipeline"] is False
         assert result["citations"] == []
         assert len(result["answer"]) > 0
@@ -119,7 +120,8 @@ def test_path_a_emotional_bypass_retrieval(db_session):
 
         # Attributes verification
         assert result["route"] == QueryRoute.EMOTIONAL_CASUAL.value
-        assert result["source_type"] == "direct_llm"
+        # Greetings/emotional replies are "conversational": the UI badge and source hiding key on it.
+        assert result["source_type"] == "conversational"
         assert result["is_in_rag_pipeline"] is False
         assert result["citations"] == []
 
@@ -282,7 +284,7 @@ def test_streaming_path_a_greeting(db_session):
         done_event = events[-1]
         assert done_event["type"] == "done"
         assert done_event["route"] == QueryRoute.EMOTIONAL_CASUAL.value
-        assert done_event["source_type"] == "direct_llm"
+        assert done_event["source_type"] == "conversational"
         assert done_event["is_in_rag_pipeline"] is False
         assert done_event["citations"] == []
 

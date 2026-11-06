@@ -185,7 +185,12 @@ class RAGService:
         selected.sort(key=lambda row: (row[1], row[2]))
 
         passages = []
+        remaining_chars = max(0, int(getattr(settings, "MAX_ATTACHMENT_PROMPT_CHARS", 24000)))
         for _score, file_index, chunk_index, name, chunk, full_length, page_number in selected:
+            if remaining_chars <= 0:
+                break
+            chunk = chunk[:remaining_chars]
+            remaining_chars -= len(chunk)
             page_count = attachments[file_index].get("page_count") or 1
             passages.append({
                 "source_type": "attached_document",

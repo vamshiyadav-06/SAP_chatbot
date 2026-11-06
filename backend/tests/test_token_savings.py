@@ -166,13 +166,13 @@ def test_memory_answer_uses_no_llm_tokens(monkeypatch):
 
 def test_regular_user_receives_the_counts_only(monkeypatch):
     events = _sprint_events(monkeypatch, user=SimpleNamespace(id="user-id", is_admin=False), conversation_chars=40000)
-    assert set(events[-1]["token_usage"]) == {"used", "baseline", "saved"}
+    assert set(events[-1]["token_usage"]) == {"used", "baseline", "saved", "cost"}
 
     event = public_done_event({
         "type": "done", "answer": "ok",
         "token_usage": {"used": 3, "baseline": 9, "saved": 6, "model": "secret-model", "provider": "groq"},
     })
-    assert event["token_usage"] == {"used": 3, "baseline": 9, "saved": 6}
+    assert event["token_usage"] == {"used": 3, "baseline": 9, "saved": 6, "cost": 0.0}
     assert "token_usage" not in public_done_event({"type": "done", "answer": "ok"})
 
 

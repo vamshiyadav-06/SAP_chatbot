@@ -428,7 +428,7 @@ def test_14_existing_rag_citations_continue_working(db_session, registered_users
 # ==============================================================================
 # TEST 15: Graceful operation when no historical messages or embeddings exist
 # ==============================================================================
-def test_15_graceful_operation_empty_history(db_session, registered_users):
+def test_15_graceful_operation_empty_history(db_session, registered_users, monkeypatch):
     user = registered_users["user_a"]
     chat = Chat(user_id=user["id"], title="Fresh Brand New Chat")
     db_session.add(chat)
@@ -436,6 +436,12 @@ def test_15_graceful_operation_empty_history(db_session, registered_users):
     db_session.refresh(chat)
 
     user_obj = db_session.query(User).filter(User.id == user["id"]).first()
+
+    # This contract test needs no live provider. Keep generation deterministic and charge-free.
+    from backend.app.config import settings
+    from backend.app.services.llm_service import llm_service
+    monkeypatch.setattr(settings, "SIMPLE_SAP_FAST_PATH_ENABLED", True)
+    monkeypatch.setattr(llm_service, "generate_completion", lambda *_args, **_kwargs: "Convergent Invoicing is SAP BRIM billing.")
     
     # Query with empty history
     result = rag_service.process_query(

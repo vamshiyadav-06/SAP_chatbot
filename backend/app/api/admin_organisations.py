@@ -35,10 +35,12 @@ from backend.app.schemas.organisation import (
     ActivationCodeReissueIn,
     OrganisationApproveIn,
     OrganisationCreateIn,
+    IndividualUserCreateIn,
     OrganisationStatusIn,
     UserStatusIn,
 )
-from backend.app.security.auth import get_current_admin_user
+from backend.app.config import settings
+from backend.app.security.auth import get_current_admin_user, hash_password
 from backend.app.services import audit_log
 from backend.app.services.organisations import (
     active_code,
@@ -306,6 +308,31 @@ def list_individual_users(
     users = query.order_by(User.created_at.desc()).offset(offset).limit(limit).all()
     chats, questions = _usage_counts(db, [user.id for user in users])
     return {"total": total, "users": [_individual_out(user, chats, questions) for user in users]}
+
+
+@router.post("/individual-users", status_code=status.HTTP_201_CREATED)
+def create_individual_user(body: IndividualUserCreateIn, request: Request,
+                           admin: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
+    """Create an individual account with a password the admin types (never returned or logged)."""
+    _require_free_email(db, body.email)
+    user = User(
+        email=body.email,
+        name=body.name,
+        password_hash=hash_password(body.password),
+        is_admin=False,
+        role="consultant",
+        groups=[settings.DEFAULT_ACCESS_GROUP],
+        account_type=ACCOUNT_INDIVIDUAL,
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_TAKEN)
+    db.refresh(user)
+    audit_log.record("user_create", request=request, principal=admin, target=user.id)
+    return _individual_out(user, {}, {})
 
 
 @router.patch("/users/{user_id}/status")

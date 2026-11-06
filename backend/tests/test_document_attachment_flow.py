@@ -71,6 +71,9 @@ def test_extract_endpoint_api():
 
 
 def test_rag_query_with_attached_document():
+    # The attachment path is an offline contract test: no live provider or corpus retrieval is needed.
+    from backend.tests.offline_rag import offline_rag
+
     db = SessionLocal()
     try:
         sample_attachments = [
@@ -83,11 +86,12 @@ def test_rag_query_with_attached_document():
         ]
 
         query = "What RFC function is used to transmit BIT records in this document?"
-        result = rag_service.process_query(
-            db=db,
-            query=query,
-            attachments=sample_attachments
-        )
+        with offline_rag(answer="The document uses /CUST/BIT_INBOUND to transmit BIT records [E1].", rows=[]):
+            result = rag_service.process_query(
+                db=db,
+                query=query,
+                attachments=sample_attachments
+            )
 
         assert result is not None
         assert result["source_type"] == "attached_document"

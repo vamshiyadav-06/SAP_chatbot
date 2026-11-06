@@ -94,6 +94,10 @@ def test_super_admin_creates_organisation_and_owner_activates_it(fx, super_admin
     password = random_password()
     complete = client.post("/api/org/activation/complete", json={"code": code, "name": "Ada Owner", "password": password})
     assert complete.status_code == 201, complete.text
+    # Activation signs the owner in: the same HttpOnly refresh cookie as every other sign-in.
+    refresh_cookie = next(h for h in complete.headers.get_list("set-cookie")
+                          if h.startswith(f"{settings.REFRESH_COOKIE_NAME}="))
+    assert "HttpOnly" in refresh_cookie and "Path=/api/auth" in refresh_cookie
     token = complete.json()
     user = token["user"]
     fx.track_user(user["id"])

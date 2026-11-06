@@ -9,6 +9,12 @@ export interface User {
   dateOfBirth?: string;
   profileCompleted?: boolean;
   created_at?: string;
+  /** Tokens left of the allowance (individual accounts). */
+  token_balance?: number;
+  /** Language answers are written in (Settings); `en` by default. */
+  preferred_language?: string;
+  /** When the token wallet is next refilled (ISO, UTC). */
+  token_refill_at?: string | null;
   /** `individual` (default) or `organisation`; older servers omit it. */
   account_type?: AccountType;
   organization_id?: string | null;
@@ -80,6 +86,8 @@ export interface TokenUsage {
   used: number;
   baseline: number;
   saved: number;
+  /** Free tokens this answer cost the user (0 to 1). */
+  cost?: number;
 }
 
 /** GET /auth/me/token-savings: the stored figures of all of the user's answers, summed. */

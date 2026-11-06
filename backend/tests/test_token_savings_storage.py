@@ -121,7 +121,7 @@ def test_history_returns_each_answers_stored_savings():
         chat_id = _chat_with(user_id, [(100, 400), None])
         messages = client.get(f"/api/chats/{chat_id}/messages", headers=headers).json()
         answers = [m for m in messages if m["role"] == "assistant"]
-        assert answers[0]["token_usage"] == {"used": 100, "baseline": 400, "saved": 300}
+        assert answers[0]["token_usage"] == {"used": 100, "baseline": 400, "saved": 300, "cost": 0.017}
         assert answers[1]["token_usage"] is None, "older answers have no figures; nothing is guessed"
         assert all(m["token_usage"] is None for m in messages if m["role"] == "user")
     finally:

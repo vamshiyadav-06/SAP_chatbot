@@ -177,5 +177,30 @@ class OrganisationStatusIn(BaseModel):
     status: Literal["active", "suspended", "deactivated"]
 
 
+class IndividualUserCreateIn(BaseModel):
+    """Super Admin creates an individual account; same name and password rules as public sign-up."""
+
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr = Field(..., max_length=255)
+    password: str = Field(..., min_length=8, max_length=72)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v):
+        return _clean_text(v, 2)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalise_email(cls, v):
+        return _lower_email(v)
+
+    @field_validator("password")
+    @classmethod
+    def bcrypt_byte_limit(cls, v):
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 UTF-8 bytes")
+        return v
+
+
 class UserStatusIn(BaseModel):
     is_active: bool

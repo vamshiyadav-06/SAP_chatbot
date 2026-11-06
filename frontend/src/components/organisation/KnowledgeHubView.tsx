@@ -20,7 +20,7 @@ export interface KnowledgeHubViewProps {
   total: number;
   error: string | null;
   onRetry: () => void;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, section?: 'comments') => void;
   onToggleLike: (answer: SharedAnswerSummary) => void;
   likeBusyIds: ReadonlySet<string>;
   onLoadMore?: () => void;

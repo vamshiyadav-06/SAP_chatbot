@@ -20,8 +20,8 @@ const linksIn = (markup: string, label: string) =>
 const linksTo = (label: string) => linksIn(html, label);
 
 describe('PublicNav', () => {
-  it('sends Sign up to the create-account tab, desktop and mobile', () => {
-    expect(linksTo('Sign up')).toEqual(['/login?mode=register', '/login?mode=register']);
+  it('does not offer individual registration when the build flag is off', () => {
+    expect(linksTo('Sign up')).toEqual([]);
   });
 
   it('sends Sign in to the sign-in tab, desktop and mobile', () => {

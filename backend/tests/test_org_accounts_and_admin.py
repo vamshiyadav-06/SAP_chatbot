@@ -398,3 +398,36 @@ def test_individual_user_management(fx, super_admin, org_team):
                         json={"is_active": False}).status_code == 400
     assert client.patch("/api/admin/users/missing/status", headers=admin_headers,
                         json={"is_active": False}).status_code == 404
+
+
+# ---------------------------------------------------------------------------- admin creates individual users
+
+def test_admin_creates_an_individual_user_who_can_sign_in(fx):
+    admin = fx.user(is_admin=True)
+    headers = headers_for(admin.id)
+    email = f"{unique('created')}@example.com"
+    body = {"name": "Created Person", "email": email.upper(), "password": "Starter-Pass-1"}
+
+    created = client.post("/api/admin/individual-users", headers=headers, json=body)
+    assert created.status_code == 201, created.text
+    data = created.json()
+    fx.track_user(data["id"])
+    assert data["email"] == email and data["is_active"] is True and data["is_admin"] is False
+    assert "password" not in data and "password_hash" not in data
+
+    login = client.post("/api/auth/login", json={"email": email, "password": "Starter-Pass-1"})
+    assert login.status_code == 200, login.text
+    assert login.json()["user"]["account_type"] == "individual"
+
+    duplicate = client.post("/api/admin/individual-users", headers=headers, json=body)
+    assert duplicate.status_code == 409
+
+
+def test_creating_individual_users_needs_an_admin_and_a_valid_password(fx):
+    plain = fx.user()
+    body = {"name": "Nope Person", "email": f"{unique('nope')}@example.com", "password": "Starter-Pass-1"}
+    assert client.post("/api/admin/individual-users", json=body).status_code in (401, 403)
+    assert client.post("/api/admin/individual-users", headers=headers_for(plain.id), json=body).status_code == 403
+    admin = fx.user(is_admin=True)
+    short = client.post("/api/admin/individual-users", headers=headers_for(admin.id), json={**body, "password": "short"})
+    assert short.status_code == 422

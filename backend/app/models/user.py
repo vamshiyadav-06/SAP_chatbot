@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, Integer, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import relationship
+from backend.app.config import settings
 from backend.app.database import Base
 
 class User(Base):
@@ -29,6 +30,13 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     must_change_password = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     last_login_at = Column(DateTime, nullable=True)
+    # Free token wallet in thousandths of a token (services/token_wallet.py); every account starts with 1,000.
+    token_balance_milli = Column(Integer, nullable=False, default=lambda: settings.TOKEN_ALLOWANCE * 1000,
+                                 server_default=text("1000000"))
+    # Language answers are written in (Settings); services/languages.py.
+    preferred_language = Column(String(8), nullable=False, default="en", server_default=text("'en'"))
+    # When the wallet is next refilled to the allowance; NULL until the account is first touched.
+    token_refill_at = Column(DateTime, nullable=True)
 
     chats = relationship("Chat", back_populates="user", cascade="all, delete-orphan")
     organization = relationship(
@@ -37,6 +45,10 @@ class User(Base):
         viewonly=True,
         lazy="select",
     )
+
+    @property
+    def token_balance(self):
+        return round((self.token_balance_milli or 0) / 1000, 2)
 
     @property
     def organization_name(self):

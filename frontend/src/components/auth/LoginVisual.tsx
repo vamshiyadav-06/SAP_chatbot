@@ -66,12 +66,12 @@ export const LoginVisual: React.FC<{ className?: string }> = ({ className }) => 
     <circle cx="176" cy="216" r="9" fill="#ff6600" />
     <path d="M171.5 216.5l3 3l6-6.5" fill="none" stroke="#0f172a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
     <text x="194" y="220" fontSize="12.5" fontWeight="700" className="lv-text lv-label">Verified answer</text>
-    <text x="392" y="220" fontSize="9.5" textAnchor="end" fill="#ff6600" className="lv-label">Scholar</text>
-    <g className="lv-bar">
-      <rect x="170" y="240" width="214" height="7" rx="3.5" />
-      <rect x="170" y="256" width="188" height="7" rx="3.5" />
-      <rect x="170" y="272" width="200" height="7" rx="3.5" />
-      <rect x="170" y="288" width="132" height="7" rx="3.5" />
+    <text x="392" y="220" fontSize="9.5" textAnchor="end" fill="#ff6600" className="lv-label">High</text>
+    <g fontSize="9.5" className="lv-muted lv-label">
+      <text x="170" y="247"><tspan className="lv-text" fontWeight="700">SOM</tspan> captures the subscription order</text>
+      <text x="170" y="263"><tspan className="lv-text" fontWeight="700">CC</tspan> rates usage and recurring fees</text>
+      <text x="170" y="279"><tspan className="lv-text" fontWeight="700">CI</tspan> bills them into one invoice</text>
+      <text x="170" y="295"><tspan className="lv-text" fontWeight="700">FI-CA</tspan> posts it to the ledger</text>
     </g>
     <g fontSize="9.5" textAnchor="middle" className="lv-label">
       <rect x="170" y="308" width="78" height="18" rx="9" fill="#ff6600" fillOpacity="0.14" stroke="#ff6600" strokeOpacity="0.45" />

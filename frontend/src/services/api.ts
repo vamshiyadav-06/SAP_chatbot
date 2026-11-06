@@ -24,6 +24,7 @@ import type {
 import { API_BASE_URL } from './apiBase';
 
 export const TOKEN_STORAGE_KEY = 'sap_assistant_token';
+const REFRESH_REQUEST_HEADER = 'X-Refresh-Request';
 
 export const getStoredToken = (): string | null => {
   return localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -35,10 +36,6 @@ export const setStoredToken = (token: string): void => {
 
 export const clearStoredToken = (): void => {
   localStorage.removeItem(TOKEN_STORAGE_KEY);
-};
-
-export const apiLogout = async (): Promise<void> => {
-  await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', headers: authHeaders() });
 };
 
 const authHeaders = (): Record<string, string> => {
@@ -67,7 +64,14 @@ export class ApiError extends Error {
 }
 
 const httpError = (resp: Response, action: string): ApiError =>
-  new ApiError(resp.status === 401 ? SESSION_EXPIRED : `${action} (HTTP ${resp.status}).`, resp.status);
+  new ApiError(
+    resp.status === 401
+      ? SESSION_EXPIRED
+      : resp.status === 402
+        ? 'You have used all your tokens.'
+        : `${action} (HTTP ${resp.status}).`,
+    resp.status,
+  );
 
 // A 401 on a request that carried our token means the session ended (expired, revoked or logged out
 // elsewhere). One handler, registered by AuthContext, clears state and returns the user to sign-in.
@@ -88,18 +92,64 @@ const reportIfUnauthorized = (resp: Response, init?: RequestInit): void => {
   if (resp.status === 401 && carriesToken(init)) unauthorizedHandler?.();
 };
 
-/** fetch for authenticated API calls: reports an expired session to the global handler. */
+let refreshInFlight: Promise<string | null> | null = null;
+
+/** Rotate the HttpOnly refresh cookie. Null means the backend definitively rejected the session. */
+const refreshAccessToken = (): Promise<string | null> => {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { [REFRESH_REQUEST_HEADER]: '1' },
+      credentials: 'include',
+    });
+    if (response.status === 401 || response.status === 403) return null;
+    if (!response.ok) throw httpError(response, 'Could not refresh the session');
+    const session = (await response.json()) as AuthTokenResponse;
+    if (!session.access_token) throw new ApiError('The server returned an invalid session response.');
+    setStoredToken(session.access_token);
+    return session.access_token;
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+};
+
+const withBearer = (init: RequestInit | undefined, token: string): RequestInit => {
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  return { ...init, headers, credentials: init?.credentials ?? 'same-origin' };
+};
+
+/** Retry one expired access token after a CSRF-protected refresh; refresh errors never sign the user out. */
+const authenticatedFetch = async (input: string, init?: RequestInit): Promise<Response> => {
+  const first = await fetch(input, init);
+  if (first.status !== 401 || !carriesToken(init)) return first;
+
+  const token = await refreshAccessToken();
+  if (!token) {
+    return first;
+  }
+  const retry = await fetch(input, withBearer(init, token));
+  return retry;
+};
+
+/** fetch for authenticated API calls: refreshes once before reporting a rejected session. */
 const authFetch = async (input: string, init?: RequestInit): Promise<Response> => {
-  const resp = await fetch(input, init);
+  const resp = await authenticatedFetch(input, init);
   reportIfUnauthorized(resp, init);
   return resp;
+};
+
+export const apiLogout = async (): Promise<void> => {
+  await authFetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', headers: authHeaders() });
 };
 
 // fetch() rejects with a bare "Failed to fetch" when the backend is down; surface the real cause.
 // A caller's own abort (Stop button) is passed through unchanged so it can be told apart.
 const fetchBackend = async (url: string, init?: RequestInit): Promise<Response> => {
   try {
-    const resp = await fetch(url, init);
+    const resp = await authenticatedFetch(url, init);
     reportIfUnauthorized(resp, init);
     return resp;
   } catch (err) {
@@ -154,7 +204,7 @@ export const apiAdminLogin = async (email: string, password: string) => {
 
 
 export const apiGetMe = async (): Promise<User> => {
-  const resp = await fetch(`${API_BASE_URL}/auth/me`, {
+  const resp = await authFetch(`${API_BASE_URL}/auth/me`, {
     headers: { ...authHeaders() },
   });
   if (!resp.ok) {
@@ -252,6 +302,42 @@ export const apiDeleteChat = async (chatId: string): Promise<void> => {
     headers: { ...authHeaders() },
   });
   if (!resp.ok) throw new Error('Failed to delete chat');
+};
+
+export const apiSetLanguage = async (language: string): Promise<User> => {
+  const resp = await authFetch(`${API_BASE_URL}/auth/me/language`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ language }),
+  });
+  if (!resp.ok) throw new Error('Failed to change the language');
+  return resp.json();
+};
+
+/** A thing the user asked the assistant to remember ("save it"). */
+export interface SavedMemory {
+  id: string;
+  content: string;
+  created_at: string | null;
+}
+
+export const apiListMemories = async (): Promise<SavedMemory[]> => {
+  const resp = await authFetch(`${API_BASE_URL}/memories`, { headers: { ...authHeaders() } });
+  if (!resp.ok) throw new Error('Failed to load saved memory');
+  return resp.json();
+};
+
+export const apiDeleteMemory = async (id: string): Promise<void> => {
+  const resp = await authFetch(`${API_BASE_URL}/memories/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { ...authHeaders() },
+  });
+  if (!resp.ok) throw new Error('Failed to delete saved memory');
+};
+
+export const apiDeleteAllMemories = async (): Promise<void> => {
+  const resp = await authFetch(`${API_BASE_URL}/memories`, { method: 'DELETE', headers: { ...authHeaders() } });
+  if (!resp.ok) throw new Error('Failed to delete saved memory');
 };
 
 // Messages API
@@ -385,6 +471,8 @@ export interface StreamMetadata {
   follow_up_questions?: string[];
   full_answer?: string;
   token_usage?: TokenUsage;
+  /** The user's free tokens left after this answer. */
+  token_balance?: number;
   llm_provider?: string;
   llm_model?: string;
   regeneration_count?: number;
@@ -1029,6 +1117,13 @@ export const apiAdminGetOrganisation = (id: string): Promise<AdminOrganisationDe
 export const apiAdminListIndividualUsers = (
   params: { search?: string; limit?: number; offset?: number } = {},
 ): Promise<IndividualUsersResponse> => orgRequest(withQuery('/admin/individual-users', params), 'Could not load users.');
+
+export const apiAdminCreateIndividualUser = (body: {
+  name: string;
+  email: string;
+  password: string;
+}): Promise<IndividualUser> =>
+  orgRequest('/admin/individual-users', 'Could not create the user.', { method: 'POST', body });
 
 export const apiAdminSetUserStatus = (id: string, isActive: boolean): Promise<IndividualUser | undefined> =>
   orgRequest(`/admin/users/${encodeURIComponent(id)}/status`, 'Could not change the account status.', {

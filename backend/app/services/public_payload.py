@@ -43,4 +43,8 @@ def public_done_event(event: Dict[str, Any]) -> Dict[str, Any]:
     usage = event.get("token_usage")
     if isinstance(usage, dict):
         payload["token_usage"] = {key: int(usage.get(key) or 0) for key in ("used", "baseline", "saved")}
+        payload["token_usage"]["cost"] = float(usage.get("cost") or 0)
+    # The user's own free-token balance after this answer.
+    if isinstance(event.get("token_balance"), (int, float)):
+        payload["token_balance"] = float(event["token_balance"])
     return payload

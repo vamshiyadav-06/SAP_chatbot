@@ -16,11 +16,16 @@ const ORGANISATION_ACTIONS = {
   signIn: ORG_LOGIN_PATH,
   primary: { to: `${ORG_PORTAL_PATH}#request`, label: 'Request access' },
 };
+const PUBLIC_REGISTRATION_ENABLED = import.meta.env.VITE_REGISTRATION_ENABLED?.toLowerCase() === 'true';
 
 export const PublicNav: React.FC = () => {
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
-  const actions = pathname.startsWith(ORG_PORTAL_PATH) ? ORGANISATION_ACTIONS : INDIVIDUAL_ACTIONS;
+  const actions = pathname.startsWith(ORG_PORTAL_PATH)
+    ? ORGANISATION_ACTIONS
+    : PUBLIC_REGISTRATION_ENABLED
+      ? INDIVIDUAL_ACTIONS
+      : { signIn: INDIVIDUAL_ACTIONS.signIn };
 
   return (
     <header className="public-nav">
@@ -41,16 +46,16 @@ export const PublicNav: React.FC = () => {
           <a href="/#faq" onClick={() => setOpen(false)}>FAQ</a>
           <div className="mobile-nav-actions">
             <Link className="nav-signin" to={actions.signIn} onClick={() => setOpen(false)}>Sign in</Link>
-            <Link className="button button-brand button-small" to={actions.primary.to} onClick={() => setOpen(false)}>
+            {'primary' in actions && <Link className="button button-brand button-small" to={actions.primary.to} onClick={() => setOpen(false)}>
               {actions.primary.label}
-            </Link>
+            </Link>}
           </div>
         </nav>
         <div className="nav-actions">
           <Link className="nav-signin" to={actions.signIn}>Sign in</Link>
-          <Link className="button button-brand button-small" to={actions.primary.to}>
+          {'primary' in actions && <Link className="button button-brand button-small" to={actions.primary.to}>
             {actions.primary.label}
-          </Link>
+          </Link>}
         </div>
       </div>
     </header>

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, RefreshCw, Search, UserRound } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, UserRound } from 'lucide-react';
 import type { IndividualUser, IndividualUsersResponse } from '../../types';
-import { apiAdminListIndividualUsers, apiAdminSetUserStatus } from '../../services/api';
+import { apiAdminCreateIndividualUser, apiAdminListIndividualUsers, apiAdminSetUserStatus } from '../../services/api';
 import { ConfirmDialog } from '../organisation/OrgDialog';
 import { formatDate, formatDateTime } from '../organisation/orgFormat';
 import '../organisation/organisation.css';
@@ -20,6 +20,35 @@ export function IndividualUsersAdminPanel({ currentUserId }: { currentUserId?: s
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<IndividualUser | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createBusy, setCreateBusy] = useState(false);
+
+  const createUser = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setCreateError(null);
+    if (form.name.trim().length < 2) return setCreateError('Enter the user’s name (at least 2 characters).');
+    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) return setCreateError('Enter a valid email address.');
+    if (form.password.length < 8) return setCreateError('The password needs at least 8 characters.');
+    setCreateBusy(true);
+    try {
+      const created = await apiAdminCreateIndividualUser({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
+      });
+      setNotice(`${created.name} was created and can sign in with the password you set.`);
+      setForm({ name: '', email: '', password: '' });
+      setCreating(false);
+      setSearch('');
+      setReloadCount((n) => n + 1);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Could not create the user.');
+    } finally {
+      setCreateBusy(false);
+    }
+  };
 
   const key = `${query}\u0000${offset}`;
 
@@ -87,10 +116,34 @@ export function IndividualUsersAdminPanel({ currentUserId }: { currentUserId?: s
           </h2>
           <p>Individual accounts only. Organisation members are managed by their organisation administrators.</p>
         </div>
-        <button type="button" className="org-btn" onClick={() => setReloadCount((n) => n + 1)}>
-          <RefreshCw size={14} aria-hidden="true" /> Refresh
-        </button>
+        <div className="org-row-actions">
+          <button type="button" className="org-btn" onClick={() => setCreating((v) => !v)}>
+            <Plus size={14} aria-hidden="true" /> Create user
+          </button>
+          <button type="button" className="org-btn" onClick={() => setReloadCount((n) => n + 1)}>
+            <RefreshCw size={14} aria-hidden="true" /> Refresh
+          </button>
+        </div>
       </div>
+
+      {creating && (
+        <form className="org-toolbar" style={{ marginBottom: 14, flexWrap: 'wrap', gap: 8 }} onSubmit={createUser} noValidate>
+          <input aria-label="New user name" placeholder="Full name" value={form.name} maxLength={100}
+            onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input aria-label="New user email" type="email" placeholder="Email" value={form.email} autoComplete="off"
+            onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <input aria-label="New user password" type="password" placeholder="Password (8+ characters)" value={form.password}
+            autoComplete="new-password" maxLength={72} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <button type="submit" className="org-btn" disabled={createBusy}>
+            {createBusy ? 'Creating…' : 'Create account'}
+          </button>
+          {createError && (
+            <p className="org-alert" role="alert" style={{ flexBasis: '100%' }}>
+              {createError}
+            </p>
+          )}
+        </form>
+      )}
 
       <div className="org-toolbar" style={{ marginBottom: 14 }}>
         <div className="org-search">

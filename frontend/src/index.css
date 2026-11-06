@@ -343,7 +343,8 @@ h1,h2,h3,p{margin-top:0}
 .dark .app-sidebar{background:#171717;border-color:#262626;color:#f4f4f5}
 
 /* Top header row inside sidebar */
-.sidebar-top-header{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 10px;min-height:40px}
+/* Same height as .chatgpt-topbar (46px) so the logo row lines up with the page header beside it */
+.sidebar-top-header{display:flex;align-items:center;justify-content:space-between;padding:0 4px;height:46px;min-height:46px;margin-bottom:8px}
 .sidebar-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;border:1px solid transparent;background:transparent;color:#475569;cursor:pointer;transition:all 0.15s ease}
 .sidebar-icon-btn:hover{background:#ebebeb;color:#0f172a}
 .dark .sidebar-icon-btn{color:#a1a1aa}
@@ -783,7 +784,7 @@ h1,h2,h3,p{margin-top:0}
 .brim-card{min-height:177px}
 .brim-abbreviation{display:block;margin-top:17px;color:var(--orange-text);font-size:10px;font-weight:700;letter-spacing:.1em}
 .brim-card h3{margin-top:7px}
-/* Sprint / Scholar mode cards */
+/* Low / High mode cards */
 .feature-grid-two{grid-template-columns:repeat(2,1fr)}
 .mode-card{min-height:0;padding:30px}
 .mode-card h3{font-size:19px}
@@ -1310,4 +1311,27 @@ h1,h2,h3,p{margin-top:0}
   font-weight: 700;
   color: #f8fafc;
 }
+
+
+
+/* Answer layout: clear section breaks, readable lists and rules */
+.prose-sap h2 {
+  margin-top: 1.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+.dark .prose-sap h2 { border-bottom-color: rgba(51, 65, 85, 0.6); }
+.prose-sap h3 { margin-top: 1.25rem; color: #c2410c; }
+.dark .prose-sap h3 { color: #fb923c; }
+.prose-sap h4 { margin-top: 1rem; }
+.prose-sap hr {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: 1.25rem 0;
+}
+.dark .prose-sap hr { border-top-color: rgba(51, 65, 85, 0.6); }
+.prose-sap ol > li::marker { color: #ea580c; font-weight: 600; }
+.prose-sap ul > li::marker { color: #ea580c; }
+.prose-sap li > p { margin-bottom: 0.35rem; }
+.prose-sap ul ul { list-style-type: circle; }
 

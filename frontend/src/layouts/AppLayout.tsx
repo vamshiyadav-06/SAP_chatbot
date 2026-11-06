@@ -20,6 +20,8 @@ import {
   Sparkles,
   MessageSquare,
   ShieldCheck,
+  Pencil,
+  Check,
 } from 'lucide-react';
 
 
@@ -27,8 +29,8 @@ import { BrandLogo } from '../components/navbar/BrandLogo';
 import { ProjectModal } from '../components/projects/ProjectModal';
 import { AssistantGuideModal } from '../components/ui/AssistantGuideModal';
 import { useAuth } from '../context/AuthContext';
-import { ORG_ADMIN_PATH, ORG_HUB_PATH, isOrgAdmin, isOrgUser, signOutPathFor } from './accountRouting';
-import { apiGetChats, apiCreateChat, apiDeleteChat } from '../services/api';
+import { ORG_ADMIN_PATH, ORG_HUB_PATH, isOrgAdmin, isOrgUser, postSignInPath, signOutPathFor } from './accountRouting';
+import { apiGetChats, apiCreateChat, apiDeleteChat, apiUpdateChat } from '../services/api';
 import { PROJECTS_CHANGED, projectService } from '../services/projectService';
 import { userStorageKey } from '../services/userStorage';
 import type { Chat, Project } from '../types';
@@ -66,6 +68,8 @@ const AccountWorkspace: React.FC = () => {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 900);
 
   const [chats, setChats] = useState<Chat[]>([]);
@@ -251,6 +255,91 @@ const AccountWorkspace: React.FC = () => {
     }
   };
 
+  const saveRename = async (chat: Chat) => {
+    const title = renameDraft.trim().slice(0, 100);
+    setEditingChatId(null);
+    if (!title || title === chat.title) return;
+    try {
+      setActionError(null);
+      const updated = await apiUpdateChat(chat.id, title);
+      setChats(prev => prev.map(c => (c.id === chat.id ? { ...c, title: updated.title ?? title } : c)));
+    } catch {
+      setActionError('Could not rename chat.');
+    }
+  };
+
+  const renderChatRow = (chat: Chat & { isPinned?: boolean }, keyPrefix = '') => {
+    const isSelected = location.pathname === `/app/chat/${chat.id}`;
+    if (editingChatId === chat.id) {
+      return (
+        <form
+          key={`${keyPrefix}${chat.id}`}
+          className="chatgpt-chat-item selected-chat"
+          onSubmit={e => {
+            e.preventDefault();
+            void saveRename(chat);
+          }}
+        >
+          <input
+            autoFocus
+            aria-label="Chat name"
+            maxLength={100}
+            value={renameDraft}
+            onChange={e => setRenameDraft(e.target.value)}
+            onKeyDown={e => e.key === 'Escape' && setEditingChatId(null)}
+            className="flex-1 min-w-0 text-sm px-2 py-1 rounded-md bg-transparent border border-orange-500/40 outline-none"
+          />
+          <button className="item-action-btn" type="submit" aria-label="Save chat name" title="Save">
+            <Check size={13} strokeWidth={2.2} />
+          </button>
+          <button className="item-action-btn" type="button" aria-label="Cancel rename" title="Cancel" onClick={() => setEditingChatId(null)}>
+            <X size={13} strokeWidth={2.2} />
+          </button>
+        </form>
+      );
+    }
+    return (
+      <div className={`chatgpt-chat-item ${isSelected ? 'selected-chat' : ''}`} key={`${keyPrefix}${chat.id}`}>
+        <NavLink className="chat-item-link" to={`/app/chat/${chat.id}`} title={chat.title}>
+          <MessageSquare size={14} strokeWidth={2} className="chat-item-icon" />
+          <span className="truncate flex-1">{chat.title}</span>
+        </NavLink>
+        <div className="chat-item-actions">
+          <button
+            className="item-action-btn"
+            type="button"
+            aria-label="Rename chat"
+            title="Rename chat"
+            onClick={() => {
+              setRenameDraft(chat.title);
+              setEditingChatId(chat.id);
+            }}
+          >
+            <Pencil size={13} strokeWidth={2} />
+          </button>
+          <button
+            className="item-action-btn"
+            type="button"
+            aria-label={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
+            title={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
+            onClick={() => toggleChatPin(chat.id)}
+          >
+            {chat.isPinned ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
+          </button>
+          <button
+            className="item-action-btn hover:text-rose-500"
+            type="button"
+            aria-label="Delete chat"
+            title="Delete chat"
+            onClick={(e) => handleDeleteChat(chat.id, e)}
+          >
+            <Trash2 size={13} strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const toggleChatPin = (chatId: string) => {
     setPinnedChatIds(prev => {
       const updated = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
@@ -293,7 +382,8 @@ const AccountWorkspace: React.FC = () => {
       <aside className={`app-sidebar ${sidebarOpen ? 'app-sidebar-open' : ''}`} aria-label="Workspace sidebar">
         {/* Top Header Row with Logo & Collapse Toggle */}
         <div className="sidebar-top-header">
-          <BrandLogo size="xl" />
+          {/* Signed in: the logo stays in the app (never the landing or organisation pages). */}
+          <BrandLogo size="lg" to={postSignInPath(user)} />
           <div className="flex items-center gap-1 ml-auto">
             {isMobile ? (
               <button
@@ -367,41 +457,7 @@ const AccountWorkspace: React.FC = () => {
                 <Pin size={11} strokeWidth={2.4} className="text-orange-500" />
                 <span>Pinned</span>
               </span>
-              {pinnedChats.map((chat) => {
-                const isSelected = location.pathname === `/app/chat/${chat.id}`;
-                return (
-                  <div className={`chatgpt-chat-item ${isSelected ? 'selected-chat' : ''}`} key={`pinned-${chat.id}`}>
-                    <NavLink
-                      className="chat-item-link"
-                      to={`/app/chat/${chat.id}`}
-                      title={chat.title}
-                    >
-                      <MessageSquare size={14} strokeWidth={2} className="chat-item-icon" />
-                      <span className="truncate flex-1">{chat.title}</span>
-                    </NavLink>
-                    <div className="chat-item-actions">
-                      <button
-                        className="item-action-btn"
-                        type="button"
-                        aria-label="Unpin chat"
-                        title="Unpin chat"
-                        onClick={() => toggleChatPin(chat.id)}
-                      >
-                        <PinOff size={13} strokeWidth={2} />
-                      </button>
-                      <button
-                        className="item-action-btn hover:text-rose-500"
-                        type="button"
-                        aria-label="Delete chat"
-                        title="Delete chat"
-                        onClick={(e) => handleDeleteChat(chat.id, e)}
-                      >
-                        <Trash2 size={13} strokeWidth={2} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {pinnedChats.map((chat) => renderChatRow(chat, 'pinned-'))}
               {pinnedProjects.map((project) => (
                 <div className="chatgpt-chat-item" key={`pinned-proj-${project.id}`}>
                   <NavLink
@@ -450,41 +506,7 @@ const AccountWorkspace: React.FC = () => {
               {groupedChats.map(({ group, chats: items }) => (
                 <div className="sidebar-group" key={group}>
                   <span className="sidebar-group-title">{group}</span>
-                  {items.map((chat) => {
-                    const isSelected = location.pathname === `/app/chat/${chat.id}`;
-                    return (
-                      <div className={`chatgpt-chat-item ${isSelected ? 'selected-chat' : ''}`} key={chat.id}>
-                        <NavLink
-                          className="chat-item-link"
-                          to={`/app/chat/${chat.id}`}
-                          title={chat.title}
-                        >
-                          <MessageSquare size={14} strokeWidth={2} className="chat-item-icon" />
-                          <span className="truncate flex-1">{chat.title}</span>
-                        </NavLink>
-                        <div className="chat-item-actions">
-                          <button
-                            className="item-action-btn"
-                            type="button"
-                            aria-label={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
-                            title={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
-                            onClick={() => toggleChatPin(chat.id)}
-                          >
-                            {chat.isPinned ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
-                          </button>
-                          <button
-                            className="item-action-btn hover:text-rose-500"
-                            type="button"
-                            aria-label="Delete chat"
-                            title="Delete chat"
-                            onClick={(e) => handleDeleteChat(chat.id, e)}
-                          >
-                            <Trash2 size={13} strokeWidth={2} />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {items.map((chat) => renderChatRow(chat))}
                 </div>
               ))}
 

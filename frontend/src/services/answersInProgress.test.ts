@@ -53,6 +53,28 @@ describe('answersInProgress: answers that keep going after the user leaves the c
     expect(answersInProgress.stop('chat-a')).toBeUndefined();
   });
 
+  it('remembers chats whose answer ended in this page session, so a reload is not mistaken for one still running', () => {
+    expect(answersInProgress.endedHere('chat-a')).toBe(false);
+
+    answersInProgress.start('chat-a', vi.fn());
+    expect(answersInProgress.endedHere('chat-a')).toBe(false);
+    answersInProgress.finish('chat-a', 'Generation interrupted. Please try again.');
+    expect(answersInProgress.endedHere('chat-a')).toBe(true);
+
+    answersInProgress.start('chat-b', vi.fn());
+    answersInProgress.stop('chat-b');
+    answersInProgress.start('chat-c', vi.fn());
+    answersInProgress.remove('chat-c');
+    // A stream that failed before the server sent its id never had an entry.
+    answersInProgress.markEnded('chat-d');
+    expect(['chat-b', 'chat-c', 'chat-d'].map((id) => answersInProgress.endedHere(id))).toEqual([true, true, true]);
+
+    // A new answer in the same chat is running again, not ended.
+    answersInProgress.start('chat-a', vi.fn());
+    expect(answersInProgress.endedHere('chat-a')).toBe(false);
+    expect(answersInProgress.endedHere(undefined)).toBe(false);
+  });
+
   it('remove forgets an answer without notifying (the visible Stop path saves it itself)', () => {
     const seen: string[] = [];
     answersInProgress.subscribe((chatId) => seen.push(chatId));

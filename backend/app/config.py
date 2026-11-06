@@ -29,14 +29,22 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = os.getenv("JWT_ISSUER", "sap-brim-assistant")
     JWT_AUDIENCE: str = os.getenv("JWT_AUDIENCE", "sap-brim-assistant-api")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # Refresh tokens (httpOnly cookie, rotated on every use, hashed in the database). A session lasts at
+    # most REFRESH_TOKEN_EXPIRE_DAYS; a rotated token presented again after the grace window revokes its
+    # whole family (theft detection). The grace window covers two tabs refreshing at the same moment.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+    REFRESH_TOKEN_REUSE_GRACE_SECONDS: int = int(os.getenv("REFRESH_TOKEN_REUSE_GRACE_SECONDS", "30"))
+    REFRESH_COOKIE_NAME: str = os.getenv("REFRESH_COOKIE_NAME", "sap_brim_refresh")
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
-    # Access control (AUDIT_REPORT F-01, owner decision 2026-11-04 in HUMAN_ACTIONS.md). Individuals sign up
-    # themselves with no code; organisations are created only through Super-Admin activation codes.
-    # REGISTRATION_ENABLED=false is an emergency switch that closes individual sign-up. Documents and users
-    # carry access groups; a regular user retrieves only from documents sharing a group. Admins see all.
-    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "True").lower() in ("true", "1")
+    # Access control (AUDIT_REPORT F-01). Individual self-registration is closed by default; opening it
+    # requires an explicit deployment setting. Organisations use Super-Admin activation codes.
+    # Token wallet (services/token_wallet.py): each individual account gets this many tokens, refilled to it
+    # every TOKEN_REFILL_DAYS days.
+    TOKEN_ALLOWANCE: int = int(os.getenv("TOKEN_ALLOWANCE", "1000"))
+    TOKEN_REFILL_DAYS: int = int(os.getenv("TOKEN_REFILL_DAYS", "3"))
+    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "False").lower() in ("true", "1")
     DEFAULT_ACCESS_GROUP: str = os.getenv("DEFAULT_ACCESS_GROUP", "all")
 
     # Rate limits and login lockout (AUDIT_REPORT F-06). REDIS_URL shares counters across workers;
@@ -93,6 +101,17 @@ class Settings(BaseSettings):
     GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "8000"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    # OpenAI-compatible endpoint used for OpenRouter. Only tests and the E2E stack point it elsewhere
+    # (a local stub provider), so browser tests never make chargeable calls.
+    OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    # Whole-request budget for answer generation (all providers, retries, repair and web fallback).
+    # When it runs out the user gets the "unavailable" answer instead of a request that never ends.
+    LLM_REQUEST_DEADLINE_SECONDS: float = float(os.getenv("LLM_REQUEST_DEADLINE_SECONDS", "120"))
+    # Size caps for what is sent to providers (characters). A longer question is rejected with 422;
+    # attachments and recalled history are trimmed to fit.
+    MAX_MESSAGE_CHARS: int = int(os.getenv("MAX_MESSAGE_CHARS", "12000"))
+    MAX_ATTACHMENT_PROMPT_CHARS: int = int(os.getenv("MAX_ATTACHMENT_PROMPT_CHARS", "24000"))
+    MAX_PROMPT_CHARS: int = int(os.getenv("MAX_PROMPT_CHARS", "60000"))
     ALLOWED_LINK_HOSTS: str = os.getenv("ALLOWED_LINK_HOSTS", "help.sap.com,learning.sap.com,community.sap.com,support.sap.com")
 
     # Vision models that read chat image attachments (comma-separated, tried in order).
@@ -248,6 +267,16 @@ def _is_template_placeholder(value: str) -> bool:
     return any(marker in lowered for marker in TEMPLATE_PLACEHOLDER_MARKERS)
 
 
+def production_origin_errors(s: Settings = settings) -> list:
+    """Production serves browsers from explicit public HTTPS origins only."""
+    origins = [origin.strip() for origin in s.ALLOWED_ORIGINS.split(",") if origin.strip()]
+    if not origins or "*" in s.ALLOWED_ORIGINS or any(
+        "localhost" in origin or "127.0.0.1" in origin for origin in origins
+    ):
+        return ["Production requires explicit public ALLOWED_ORIGINS without wildcards or localhost entries."]
+    return []
+
+
 def security_settings_errors(s: Settings = settings) -> list:
     """Problems that make the configured secrets unsafe; the app refuses to start on any."""
     errors = []
@@ -266,6 +295,7 @@ def security_settings_errors(s: Settings = settings) -> list:
     ):
         errors.append(f"SUPER_ADMIN_PASSWORD must be a private password of at least {MIN_ADMIN_PASSWORD_LENGTH} characters.")
     if s.ENVIRONMENT.lower() == "production":
+        errors.extend(production_origin_errors(s))
         if _is_template_placeholder(urlparse(s.DATABASE_URL).password or ""):
             errors.append("DATABASE_URL still uses the template database password; set a private one (production).")
         if _is_template_placeholder(s.SUPER_ADMIN_PASSWORD):

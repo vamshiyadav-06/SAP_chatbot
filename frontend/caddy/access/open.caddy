@@ -1,0 +1,2 @@
+# ACCESS_MODE=open: no extra gate in front of the application (production).
+# The application's own sign-in protects every private page and API endpoint.

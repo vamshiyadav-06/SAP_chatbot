@@ -8,12 +8,14 @@ const render = (mode: ChatMode) =>
   renderToStaticMarkup(<WelcomeScreen mode={mode} onModeChange={() => {}} onSelectPrompt={() => {}} />);
 
 describe('WelcomeScreen', () => {
-  it('marks only the active mode as pressed', () => {
-    const html = render('scholar');
+  it('has a single High button that is pressed only in High mode', () => {
+    const high = render('scholar');
+    const low = render('sprint');
 
-    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
-    expect(html.match(/aria-pressed="false"/g)).toHaveLength(1);
-    expect(html.indexOf('aria-pressed="true"')).toBeGreaterThan(html.indexOf('Sprint'));
+    expect(high.match(/<button[^>]*aria-label="High mode"/g)).toHaveLength(1);
+    expect(high).toContain('aria-pressed="true"');
+    expect(low).toContain('aria-pressed="false"');
+    expect(low).not.toContain('>Low</button>');
   });
 
   it.each<ChatMode>(['sprint', 'scholar'])('shows the %s suggestions only', (mode) => {
@@ -31,10 +33,8 @@ describe('WelcomeScreen', () => {
 
     expect(html).not.toContain('Ask any question');
     expect(html).toContain('SAP BRIM');
-    for (const { title, detail } of MODES) {
-      expect(html).toContain(title);
-      expect(html).toContain(detail);
-    }
+    expect(html).toContain(MODES[0].detail); // the chosen mode is explained under the switch
+    expect(render('scholar')).toContain(MODES[1].detail);
     expect(html).toContain('AI answers can contain mistakes');
   });
 

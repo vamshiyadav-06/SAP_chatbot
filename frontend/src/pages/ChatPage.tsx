@@ -4,6 +4,7 @@ import { useParams, useNavigate, useLocation, useSearchParams } from 'react-rout
 import type { ChatMode, Message, DocumentAttachment, TokenUsage } from '../types';
 import { ChatMessage } from '../components/chat/ChatMessage';
 import { ChatSavingsLine } from '../components/chat/ChatSavingsLine';
+import { recallTokenWallet, rememberTokenWallet, type TokenWallet } from '../components/chat/TokenBalance';
 import { isStoredMessage } from '../components/chat/messageUtils';
 import { ChatInput } from '../components/chat/ChatInput';
 import { WelcomeScreen } from '../components/chat/WelcomeScreen';
@@ -72,6 +73,7 @@ export const ChatPage: React.FC = () => {
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   // Savings popup of the last completed answer.
   const [savedToast, setSavedToast] = useState<TokenUsage | null>(null);
+  const [tokenBalance, setTokenBalance] = useState<TokenWallet | null>(() => recallTokenWallet(user));
   const closeSavedToast = useCallback(() => setSavedToast(null), []);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -294,7 +296,7 @@ export const ChatPage: React.FC = () => {
     );
   };
 
-  // Switching Sprint/Scholar applies to the next question; a running answer keeps going.
+  // Switching Low/High applies to the next question; a running answer keeps going.
   const handleModeChange = (nextMode: ChatMode) => {
     if (nextMode === chatMode) return;
     setChatMode(nextMode);
@@ -464,6 +466,11 @@ export const ChatPage: React.FC = () => {
         setStreamingStage(null);
         setStreamingMeta(null);
         if (meta.token_usage) setSavedToast(meta.token_usage);
+        if (typeof meta.token_balance === 'number') {
+          const wallet = { balance: meta.token_balance, refillAt: tokenBalance?.refillAt ?? user?.token_refill_at };
+          setTokenBalance(wallet);
+          if (user?.id) rememberTokenWallet(user.id, wallet);
+        }
       }
     }, 20);
 
@@ -594,6 +601,7 @@ export const ChatPage: React.FC = () => {
                   key={msg.id}
                   message={msg}
                   orgSharedIds={orgSharedIds}
+                  tokenWallet={isLast && msg.role === 'assistant' ? tokenBalance : null}
                   onOrgShared={markOrgShared}
                   onSelectFollowUp={(q) => handleSendMessage(q)}
                   onEdit={

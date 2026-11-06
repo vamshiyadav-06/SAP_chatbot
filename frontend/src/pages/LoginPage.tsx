@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 // Mirrors the backend UserRegister schema (backend/app/schemas/auth.py).
 const PASSWORD_MIN = 8;
 const PASSWORD_MAX = 72;
+const PUBLIC_REGISTRATION_ENABLED = import.meta.env.VITE_REGISTRATION_ENABLED?.toLowerCase() === 'true';
 
 export const LoginPage: React.FC = () => {
   const { user, login, register } = useAuth();
@@ -16,12 +17,12 @@ export const LoginPage: React.FC = () => {
   const [searchParams] = useSearchParams();
 
   const [mode, setMode] = useState<'login' | 'register'>(() => {
-    return searchParams.get('mode') === 'register' ? 'register' : 'login';
+    return PUBLIC_REGISTRATION_ENABLED && searchParams.get('mode') === 'register' ? 'register' : 'login';
   });
 
   useEffect(() => {
     const urlMode = searchParams.get('mode');
-    if (urlMode === 'register' || urlMode === 'login') {
+    if (urlMode === 'login' || (PUBLIC_REGISTRATION_ENABLED && urlMode === 'register')) {
       setMode(urlMode);
     }
   }, [searchParams]);
@@ -91,7 +92,7 @@ export const LoginPage: React.FC = () => {
               <ShieldCheck size={22} strokeWidth={2} />
             </span>
             <blockquote>
-              “Your conversations stay private to your account, and every Scholar answer is checked
+              “Your conversations stay private to your account, and every High answer is checked
               against SAP documentation before you see it.”
             </blockquote>
             <figcaption>Private by default · Verified by design</figcaption>
@@ -109,7 +110,7 @@ export const LoginPage: React.FC = () => {
               <h1>{isRegister ? 'Create your account' : 'Welcome back'}</h1>
               <p>{isRegister ? 'Start asking SAP BRIM questions in minutes.' : 'Sign in to your Clyptus.AI workspace.'}</p>
 
-              <div className="auth-tabs" role="tablist" aria-label="Account">
+              {PUBLIC_REGISTRATION_ENABLED && <div className="auth-tabs" role="tablist" aria-label="Account">
                 <button
                   type="button"
                   role="tab"
@@ -128,7 +129,7 @@ export const LoginPage: React.FC = () => {
                 >
                   Create Account
                 </button>
-              </div>
+              </div>}
 
               {justCreated && !error && (
                 <p className="auth-notice" role="status">
