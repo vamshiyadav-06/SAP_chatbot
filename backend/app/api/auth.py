@@ -209,6 +209,23 @@ def set_language(body: LanguageIn, current_user: User = Depends(get_current_user
     return UserResponse.model_validate(current_user)
 
 
+class QuestionLanguageIn(BaseModel):
+    language: Optional[str] = None  # empty/null = same as the answer language
+
+
+@router.patch("/me/question-language", response_model=UserResponse)
+def set_question_language(body: QuestionLanguageIn, current_user: User = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Choose the language questions are written in; empty means the same as the answer language."""
+    code = (body.language or "").strip().lower()
+    if code and code not in languages.LANGUAGES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported language.")
+    current_user.question_language = code or None
+    db.commit()
+    db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
+
+
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user_allow_password_change), db: Session = Depends(get_db)):
     token_wallet.refill_if_due(db, current_user)

@@ -56,6 +56,7 @@ interface AuthContextType {
   updateProfile: (updates: { name: string; dateOfBirth?: string; avatar?: string }) => void;
   /** Remembers the answer language the server accepted. */
   setPreferredLanguage: (code: string) => void;
+  setQuestionLanguage: (code: string | null) => void;
   logout: () => void;
 }
 
@@ -227,6 +228,10 @@ export const AuthProvider: React.FC<{
     if (user) saveUser({ ...user, preferred_language: code });
   };
 
+  const setQuestionLanguage = (code: string | null) => {
+    if (user) saveUser({ ...user, question_language: code });
+  };
+
   const updateProfile = (updates: { name: string; dateOfBirth?: string; avatar?: string }) => {
     if (!user) return;
     saveUser({ ...user, ...updates, profileCompleted: true });
@@ -257,6 +262,7 @@ export const AuthProvider: React.FC<{
         register,
         updateProfile,
         setPreferredLanguage,
+        setQuestionLanguage,
         logout,
       }}
 

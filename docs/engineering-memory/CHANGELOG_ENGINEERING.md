@@ -1,3 +1,22 @@
+## 2026-11-06 - Deployment fixes: stale test fakes, compose health ordering, rollback and key-rotation docs
+
+* The 10 failing backend tests were stale fixtures, not application defects: the sign-up fakes did not supply the database default `preferred_language` (a real commit + refresh does), and the login fake session lacked `execute`, which the token-wallet top-up calls on sign-in and `/me`. Fixed in `test_audit_access.py`, `test_audit_auth.py` and `test_security_audit_characterization.py`; no test was skipped or deleted and no production code changed for this.
+* `docker-compose.prod.yml`: `web` now waits for the backend to be `service_healthy` (was a plain start-order dependency); asserted in `test_deployment_config.py`.
+* `DEPLOYMENT.md`: `REGISTRATION_ENABLED` row, a Roll back section, and the Groq/Gemini/OpenRouter keys committed in `685bb31` named for rotation (no values; history not rewritten).
+* Verified: `pytest backend/tests -m "not live"` with providers disabled 886 passed, 2 skipped, 7 deselected; Vitest 271 passed (47 files); `tsc -b` and `vite build` clean; `npm audit --omit=dev` 0 vulnerabilities; `docker compose config` valid; both Dockerfiles pass `docker build --check`; Caddyfile validated with `caddy validate` (open and basic_auth); all 15 migrations applied to a fresh disposable database, `downgrade -1` and re-upgrade worked, and the temp database was dropped.
+* Not verified: Docker image builds and the running stack (C: has about 1.6 GB free; the backend image installs PyTorch), HTTPS issuance, chat streaming through Caddy, any live Groq/Gemini/OpenRouter call, upgrading an existing populated database, and a browser session.
+
+## 2026-11-06 - Question language setting
+
+* Settings > Language now has a **Question language** dropdown beside Answer language, with a first option "Same as answer language" (the old behaviour, and the default). New nullable column `users.question_language` (migration `0015_question_language`, additive), `PATCH /api/auth/me/question-language` (`{language: code|null}`, 422 for unknown codes), `question_language` on the user response, and `languages.question_language_of()`. `api/messages.py` (Sprint stream and Scholar stream) translates the question to English from the question language instead of the answer language, so a user who reads English answers but types Telugu is no longer refused as off-topic.
+* Tests: `test_languages.py` + `test_company_info.py` 30 passed; Vitest 47 files / 271 passed; `tsc -b` and `vite build` passed. Not run: the migration on a real database (the next backend start with `AUTO_MIGRATE=true` applies it; additive) and a browser check of the two dropdowns. Translation quality depends on the live model and was not exercised.
+
+## 2026-11-06 - Questions about Clyptus are answered, not refused
+
+* The SAP-only classifier refused "What is Clyptus?" in Sprint and Scholar. New `backend/app/services/company_info.py` detects questions about Clyptus / Clyptus.AI or "who built you" and returns a fixed profile taken from the landing page's About text (no model call, so nothing is invented). Hooked into `_sprint_route`/`_sprint_result`/the Sprint stream in `api/messages.py` and the scope gate in `rag_service._answer_pipeline`; stored `source_type` is `conversational`. Turns with attachments are unaffected; unrelated off-topic questions are still refused.
+* Owner action: the profile text lives in `COMPANY_ANSWER`; edit it there (and the landing page) if the company description changes.
+* Tests: new `backend/tests/test_company_info.py` 22 passed; `test_chat_modes`, `test_sap_restriction`, `test_query_router` 34 passed (providers disabled, no live calls). Not checked in a browser or against the live LLM; the HTTP streaming path was exercised only through the shared route helper, not an end-to-end request.
+
 ## 2026-11-05 - Staging controls, secure refresh, AI stream reliability, regression coverage
 
 * Closed public individual registration by default in backend configuration and the frontend build; the API remains authoritative. Staging uses Basic auth on every route except `/health`, a loopback web bind, separate Compose project/volumes, and a staging preflight.

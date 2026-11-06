@@ -71,3 +71,24 @@ def test_direct_answers_are_told_to_write_in_the_chosen_language():
     assert "ANSWER LANGUAGE" in in_hindi and "Hindi" in in_hindi
     in_english = list(languages.scoped(build(), "en"))[0]
     assert "ANSWER LANGUAGE" not in in_english
+
+
+def test_question_language_defaults_to_the_answer_language_and_can_differ(fx):
+    headers = headers_for(fx.user().id)
+    assert client.get("/api/auth/me", headers=headers).json()["question_language"] is None
+    chosen = client.patch("/api/auth/me/question-language", headers=headers, json={"language": "te"})
+    assert chosen.status_code == 200 and chosen.json()["question_language"] == "te"
+    assert chosen.json()["preferred_language"] == "en"  # the answer language is independent
+    assert client.patch("/api/auth/me/question-language", headers=headers, json={"language": "xx"}).status_code == 422
+    cleared = client.patch("/api/auth/me/question-language", headers=headers, json={"language": None})
+    assert cleared.status_code == 200 and cleared.json()["question_language"] is None
+    assert client.patch("/api/auth/me/question-language", json={"language": "te"}).status_code in (401, 403)
+
+
+def test_question_language_of_prefers_the_explicit_choice():
+    from types import SimpleNamespace
+
+    assert languages.question_language_of(SimpleNamespace(preferred_language="hi", question_language=None)) == "hi"
+    assert languages.question_language_of(SimpleNamespace(preferred_language="hi", question_language="te")) == "te"
+    assert languages.question_language_of(SimpleNamespace(preferred_language="hi", question_language="en")) == "en"
+    assert languages.question_language_of(SimpleNamespace(preferred_language=None, question_language="xx")) == "en"

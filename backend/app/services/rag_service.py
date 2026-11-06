@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Generator, Optional
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
+from backend.app.services.company_info import COMPANY_ANSWER, is_company_question
 from backend.app.services.sap_classifier import sap_classifier
 from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.reranking_service import reranking_service
@@ -1320,6 +1321,25 @@ class RAGService:
 
         # Strict SAP scope gate; uploaded attachments are analysed regardless of topic.
         target_check_query = cleaned_query if is_follow_up else query.strip()
+        if not has_attachments and is_company_question(query):
+            return {
+                "answer": COMPANY_ANSWER,
+                "source_type": "conversational",
+                "grounding_score": None,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "company_info",
+                "verification_status": "unverified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": [],
+                "selection_summary": "Answered from the fixed Clyptus company profile.",
+            }
         if not has_attachments:
             is_sap, refusal_msg = sap_classifier.classify(target_check_query)
             if not is_sap:

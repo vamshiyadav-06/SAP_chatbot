@@ -56,6 +56,7 @@ class UserResponse(BaseModel):
     token_balance: float = 0.0
     token_refill_at: Optional[datetime] = None
     preferred_language: str = "en"
+    question_language: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

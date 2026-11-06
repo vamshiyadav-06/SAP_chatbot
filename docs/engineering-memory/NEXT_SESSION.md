@@ -1,5 +1,9 @@
 # Next session handover
 
+## Deployment fixes and verification (2026-11-06, later)
+
+Backend 886 passed / 2 skipped (providers disabled), Vitest 271, builds clean, compose and Caddy validated, migrations 0001-0015 verified on a throwaway database. Uncommitted and unpushed: company-answer feature (`company_info.py`), question language (migration 0015, Settings dropdown), test-fixture fixes, compose `service_healthy`, `DEPLOYMENT.md` additions. Remaining owner/server actions: build the images and start the stack on the Linux server, take a backup first, rotate the keys from `685bb31`, decide `REGISTRATION_ENABLED`, then run one real chat through the proxy. The existing real database was not touched; upgrading it from its current revision is untested.
+
 ## Deployment audit, push and clean-up (2026-11-06)
 
 Audit verdict: **not production-ready**; conditionally ready for a private, gated staging run. Owner accepted that the repository stays public and asked for the code to be pushed.

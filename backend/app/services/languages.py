@@ -57,6 +57,14 @@ def normalize(code: Optional[str]) -> str:
     return code if code in LANGUAGES else DEFAULT_LANGUAGE
 
 
+def question_language_of(user) -> str:
+    """The language this user writes questions in: their explicit choice, else the answer language."""
+    chosen = getattr(user, "question_language", None)
+    if chosen:
+        return normalize(chosen)
+    return normalize(getattr(user, "preferred_language", None))
+
+
 def english_name(code: str) -> str:
     return LANGUAGES[normalize(code)][0]
 

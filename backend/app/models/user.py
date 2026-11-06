@@ -35,6 +35,8 @@ class User(Base):
                                  server_default=text("1000000"))
     # Language answers are written in (Settings); services/languages.py.
     preferred_language = Column(String(8), nullable=False, default="en", server_default=text("'en'"))
+    # Language questions are written in (Settings); NULL = same as the answer language.
+    question_language = Column(String(8), nullable=True)
     # When the wallet is next refilled to the allowance; NULL until the account is first touched.
     token_refill_at = Column(DateTime, nullable=True)
 

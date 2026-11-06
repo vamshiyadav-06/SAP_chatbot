@@ -304,6 +304,16 @@ export const apiDeleteChat = async (chatId: string): Promise<void> => {
   if (!resp.ok) throw new Error('Failed to delete chat');
 };
 
+export const apiSetQuestionLanguage = async (language: string | null): Promise<User> => {
+  const resp = await authFetch(`${API_BASE_URL}/auth/me/question-language`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ language }),
+  });
+  if (!resp.ok) throw new Error('Failed to change the question language');
+  return resp.json();
+};
+
 export const apiSetLanguage = async (language: string): Promise<User> => {
   const resp = await authFetch(`${API_BASE_URL}/auth/me/language`, {
     method: 'PATCH',

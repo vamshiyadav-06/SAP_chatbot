@@ -123,6 +123,7 @@ Open `.env` (`nano .env`) and set:
 | `GROQ_API_KEY` (and/or `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) | at least one LLM key |
 | `WEB_SEARCH_API_KEY` | Tavily key, optional |
 | `APP_UID` | only if `id -u` was not `1000` |
+| `REGISTRATION_ENABLED` | `True` shows the Register button (open sign-up, no e-mail verification: anyone can use your LLM quota); `False` hides it and you create users with `backend/scripts/create_user.py`. It is built into the web image, so rebuild after changing it. |
 
 Everything else can stay as it is. Notes:
 
@@ -258,6 +259,19 @@ docker compose ps                       # backend becomes "healthy" again after 
 
 The backend applies new database migrations when it starts. If the backend does not come back, check `docker compose logs backend` before doing anything else.
 
+### Roll back
+
+If a new version misbehaves, go back to the previous commit. Migrations are additive, so older code runs on the newer schema; if a migration itself failed, restore the backup you took before updating.
+
+```sh
+git log --oneline -5                      # note the last good commit
+git checkout <good-commit>
+docker compose up -d --build
+docker compose ps
+```
+
+Do not run `docker compose down -v` (it deletes the database volume).
+
 ### Backups
 
 Back up the database daily and keep copies **off the server**. A manual backup:
@@ -279,6 +293,8 @@ Also back up `.env` (it holds the only copy of your secrets) and `knowledge_base
 **Restore** a backup: follow [Option A](#option-a-recommended-restore-a-backup-of-an-existing-installation) on a fresh database. To restore over a running installation, restore into a new database next to it first and check it, as described in [docker.md §8](docker.md#8-backup-and-restore). Never delete the `pgdata` volume (`docker compose down -v`) without a verified backup.
 
 ### Rotate secrets
+
+**Keys that were committed to Git (`685bb31`, Clyptus-Soft history) must be rotated.** That commit put the Groq, Google Gemini and OpenRouter API keys into `.env.example`. Create a **new** key at each provider's console, put it in the server `.env`, then delete (revoke) the old key there. Never reuse a value from Git, chat or a template. The history was not rewritten; removing it from Clyptus-Soft needs a force-push that only the repository owner should decide.
 
 - **`JWT_SECRET`:** change it in `.env`, then `docker compose up -d backend`. Every user is signed out.
 - **LLM / Tavily keys:** change them in `.env`, then `docker compose up -d backend`.

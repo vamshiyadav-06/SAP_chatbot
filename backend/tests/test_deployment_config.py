@@ -162,6 +162,7 @@ def test_backend_trusts_only_private_proxy_ranges_and_does_not_auto_migrate_in_p
     networks = [ipaddress.ip_network(part.strip()) for part in backend["environment"]["TRUSTED_PROXIES"].split(",")]
     assert networks and all(network.is_private for network in networks)
     assert backend["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert _compose()["services"]["web"]["depends_on"]["backend"]["condition"] == "service_healthy"
     assert "./knowledge_base:/app/knowledge_base" in backend["volumes"]
 
 

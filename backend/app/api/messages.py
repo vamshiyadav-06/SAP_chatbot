@@ -35,6 +35,7 @@ from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.reranking_service import reranking_service
 from backend.app.services.grounding_service import grounding_service
 from backend.app.services.web_search_service import web_search_service
+from backend.app.services.company_info import COMPANY_ANSWER, is_company_question
 from backend.app.services.sap_classifier import NON_SAP_REFUSAL_RESPONSE, sap_classifier
 from backend.app.services.evidence_markers import strip_markers, StreamingMarkerStripper
 from backend.app.services.conversation_memory_service import MemoryIntent, conversation_memory_service
@@ -474,6 +475,8 @@ def _sprint_route(query: str, chat_history, attachments, memory: Dict[str, Any])
         return "conversation_memory"
     if memory.get("intent") in _SPRINT_RECALL_INTENTS or _sprint_allowed(query, chat_history, attachments):
         return "sprint"
+    if not attachments and is_company_question(query):
+        return "company"  # about Clyptus itself: a fixed answer instead of the SAP-only refusal
     if not attachments and query_router.route(query, chat_history=chat_history).route == QueryRoute.EMOTIONAL_CASUAL:
         return "conversational"
     return "refusal"
@@ -485,6 +488,11 @@ def _sprint_result(query: str, chat_history, attachments, memory: Optional[Dict[
     if route == "conversation_memory":
         return {
             "answer": memory["answer"], "source_type": "conversation_memory",
+            "verification_status": "unverified", "grounding_score": None,
+        }
+    if route == "company":
+        return {
+            "answer": COMPANY_ANSWER, "source_type": "conversational",
             "verification_status": "unverified", "grounding_score": None,
         }
     if route == "refusal":
@@ -1070,7 +1078,7 @@ def handle_streaming_response(
             # verify the English draft, then translate the finished answer for the user.
             language = languages.normalize(getattr(current_user, "preferred_language", None))
             translate_answer = not languages.is_english(language)
-            rag_query = languages.question_to_english(query, language)
+            rag_query = languages.question_to_english(query, languages.question_language_of(current_user))
             rag_events = user_memory.scoped(with_generation_context(_invoke_rag_stream(
                 save_db, rag_query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id,
                 regeneration_index=regeneration,
@@ -1262,7 +1270,8 @@ def handle_sprint_streaming_response(
             memory_text = "" if memory.get("answer") else _saved_memory_text(save_db, current_user.id, query)
             language = languages.normalize(getattr(current_user, "preferred_language", None))
             # The SAP-topic check works on English; the model still gets the question as the user wrote it.
-            scope_query = languages.question_to_english(query, language) if not memory.get("answer") else query
+            scope_query = (languages.question_to_english(query, languages.question_language_of(current_user))
+                           if not memory.get("answer") else query)
             route = _sprint_route(scope_query, hist, attachments, memory)
             if route == "refusal" and user_memory.matches_query(memory_text, query):
                 route = "sprint"  # a question about what the user saved is not off-topic
@@ -1292,8 +1301,13 @@ def handle_sprint_streaming_response(
                 verification_status = "unavailable" if source_type == "unavailable" else "unverified"
             else:
                 # A memory lookup answered from the database, or the SAP-scope refusal.
-                answer = memory["answer"] if route == "conversation_memory" else NON_SAP_REFUSAL_RESPONSE
-                source_type = route
+                if route == "conversation_memory":
+                    answer = memory["answer"]
+                elif route == "company":
+                    answer = COMPANY_ANSWER
+                else:
+                    answer = NON_SAP_REFUSAL_RESPONSE
+                source_type = "conversational" if route == "company" else route
                 verification_status = "unverified"
                 accumulated_text = answer
                 visible = marker_stripper.feed(answer) if marker_stripper is not None else answer

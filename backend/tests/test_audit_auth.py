@@ -54,6 +54,11 @@ class FakeSession:
         # A successful sign-in stores a refresh-token row (models/refresh_token.py).
         self.added.append(row)
 
+    def execute(self, *args, **kwargs):
+        # Sign-in and /me top up the token wallet with UPDATE statements (services/token_wallet.py);
+        # rowcount 0 = nothing was due, so no commit/refresh follows.
+        return SimpleNamespace(rowcount=0)
+
 
 def make_user(email, is_admin=False):
     return SimpleNamespace(id=str(uuid.uuid4()), email=email, name="Test User", password_hash=PASSWORD_HASH,

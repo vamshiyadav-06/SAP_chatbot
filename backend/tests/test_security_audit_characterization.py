@@ -44,6 +44,7 @@ def test_public_registration_is_always_regular_and_ignores_role(audit_client, mo
     def refresh(user):
         user.id = "created"
         user.created_at = datetime.now(timezone.utc)
+        user.preferred_language = "en"  # the real database supplies the column default
     db.refresh.side_effect = refresh
     response = client.post("/api/auth/register", json={
         "email": "new@example.com", "name": "New User", "password": "Long-Secure-Password-123", "role": "admin"

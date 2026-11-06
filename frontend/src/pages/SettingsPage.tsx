@@ -11,7 +11,7 @@ import { apiGetTokenSavings } from '../services/api';
 type Appearance = 'light' | 'dark' | 'system';
 
 export const SettingsPage: React.FC = () => {
-  const { user, logout, setPreferredLanguage } = useAuth();
+  const { user, logout, setPreferredLanguage, setQuestionLanguage } = useAuth();
   const navigate = useNavigate();
   const [savings, setSavings] = useState<TokenSavingsState>({ status: 'loading' });
 
@@ -84,7 +84,12 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
-      <LanguageCard value={user?.preferred_language ?? 'en'} onChanged={setPreferredLanguage} />
+      <LanguageCard
+        value={user?.preferred_language ?? 'en'}
+        onChanged={setPreferredLanguage}
+        questionValue={user?.question_language ?? ''}
+        onQuestionChanged={setQuestionLanguage}
+      />
 
       <TokenSavingsCard state={savings} />
 

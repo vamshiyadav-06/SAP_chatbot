@@ -146,6 +146,8 @@ class RegistrationSession:
 
     def add(self, obj):
         obj.id, obj.token_version, obj.created_at = str(uuid.uuid4()), 0, datetime(2026, 1, 1)
+        # Column defaults the real database fills in on insert and `refresh` reloads.
+        obj.preferred_language = "en"
         self.added.append(obj)
 
     def commit(self):

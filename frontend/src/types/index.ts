@@ -13,6 +13,8 @@ export interface User {
   token_balance?: number;
   /** Language answers are written in (Settings); `en` by default. */
   preferred_language?: string;
+  /** Language questions are written in; empty/null means the same as the answer language. */
+  question_language?: string | null;
   /** When the token wallet is next refilled (ISO, UTC). */
   token_refill_at?: string | null;
   /** `individual` (default) or `organisation`; older servers omit it. */
