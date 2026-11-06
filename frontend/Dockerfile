@@ -11,7 +11,7 @@ COPY . .
 # Set it only when the API is served from another origin, e.g. https://api.example.com/api.
 ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
-ARG VITE_REGISTRATION_ENABLED=false
+ARG VITE_REGISTRATION_ENABLED=true
 ENV VITE_REGISTRATION_ENABLED=${VITE_REGISTRATION_ENABLED}
 RUN npm run build
 

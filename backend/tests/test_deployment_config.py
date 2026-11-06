@@ -74,7 +74,7 @@ def test_production_template_targets_the_compose_database_and_https_origin():
     assert values["ENVIRONMENT"] == "production"
     assert values["ALLOWED_ORIGINS"] == f"https://{values['APP_DOMAIN']}"
     assert values["INCLUDE_SELF_AUTHORED_DOCS"] == "False"
-    assert values["REGISTRATION_ENABLED"] == "False"
+    assert values["REGISTRATION_ENABLED"] == "True"
 
 
 def test_untouched_production_template_is_refused_at_startup():
@@ -197,7 +197,7 @@ def test_web_image_builds_the_app_and_proxies_the_api_with_streaming():
     assert "try_files {path} /index.html" in caddyfile
     assert "frame-ancestors 'none'" in caddyfile
     assert "VITE_REGISTRATION_ENABLED" in dockerfile
-    assert _compose()["services"]["web"]["build"]["args"]["VITE_REGISTRATION_ENABLED"] == "${REGISTRATION_ENABLED:-False}"
+    assert _compose()["services"]["web"]["build"]["args"]["VITE_REGISTRATION_ENABLED"] == "${REGISTRATION_ENABLED:-True}"
 
 
 # --- staging template, gate and image pins ---------------------------------------------------------------

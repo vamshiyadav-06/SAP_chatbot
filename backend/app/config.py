@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # every TOKEN_REFILL_DAYS days.
     TOKEN_ALLOWANCE: int = int(os.getenv("TOKEN_ALLOWANCE", "1000"))
     TOKEN_REFILL_DAYS: int = int(os.getenv("TOKEN_REFILL_DAYS", "3"))
-    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "False").lower() in ("true", "1")
+    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "True").lower() in ("true", "1")
     DEFAULT_ACCESS_GROUP: str = os.getenv("DEFAULT_ACCESS_GROUP", "all")
 
     # Rate limits and login lockout (AUDIT_REPORT F-06). REDIS_URL shares counters across workers;

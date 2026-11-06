@@ -93,7 +93,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
-        VITE_REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-False}
+        VITE_REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-True}
     image: sap-brim-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
