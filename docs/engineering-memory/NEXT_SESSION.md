@@ -1,5 +1,21 @@
 # Next session handover
 
+## Deployment audit, push and clean-up (2026-11-06)
+
+Audit verdict: **not production-ready**; conditionally ready for a private, gated staging run. Owner accepted that the repository stays public and asked for the code to be pushed.
+
+* Pushed to `main` of vamshiyadav-06/SAP_chatbot (fast-forward, no force): `82b3b3a` (refresh tokens, token wallet, user memory/language, AI reliability, staging controls, migrations 0010-0014, `requirements.lock`) and `e2901a8` (clean-up). `AUDIT_REPORT.md` and all `.env*` files were not committed; a staged-diff scan found no keys.
+* Clean-up: deleted git-ignored `scratch/`, `.pytest_cache/` and `__pycache__` folders; removed tracked `SESSION_CHANGES_2026-11-03.md` and the 20 historical files in `backend/evaluation/results/` (they no longer exist; earlier notes that cite them refer to deleted output, and the CLI recreates that folder when run). `docker.md` was kept because `DEPLOYMENT.md`, `README.md` and `docker-setup/README.md` link to it. Evaluation scripts and datasets remain.
+* Verified this session: Vitest 270 passed (47 files); `npm run build` passed; `npm audit --omit=dev` 0 vulnerabilities; backend compileall passed; migration chain 0009-0014 is linear. Backend tests were NOT re-run (Docker and Postgres were down).
+
+Blockers and owner actions before production:
+* Replace every `change-me` value in the server `.env` (database passwords, `JWT_SECRET`, admin password); the backend refuses to start with placeholders.
+* Rotate the Groq/Gemini/OpenRouter keys committed in `685bb31` (Clyptus-Soft history), if not done.
+* The public repo tracks the 61 knowledge-base PDFs (licensing open, HUMAN_ACTIONS.md section 3).
+* DEPLOY-001: images never built. On a Linux server: back up the database, then `docker compose -f docker-compose.prod.yml up -d --build` per `DEPLOYMENT.md`; run `scripts/staging/deploy.sh`, Playwright, `test-load.py`, `test-recovery.sh` and record results.
+* No clean full backend result exists. Run `pytest backend/tests -m "not live"` with nonempty sentinel keys (`disabled`), `LLM_ALLOWED_PROVIDERS=disabled`, `WEB_FALLBACK_ENABLED=False` and a healthy `_test` Postgres.
+* Leftovers: `.env.bak`, `backend/.env.bak` (owner backups, ignored) and an access-denied empty `.pytest_tmp_20261105_audit/`.
+
 ## Staging readiness, auth refresh, and AI reliability (2026-11-05)
 
 Owner requested fixes for deployment blockers, backend failures, closed public registration, protected staging access, AI streaming/fallback/cancellation/timeouts, secure refresh, browser/Docker/load/recovery checks, a fresh staging database, a repeatable Ubuntu process, and actual evidence in `docs/audits/STAGING_DEPLOYMENT_READINESS_AUDIT.md`. Do not alter the live Ubuntu server, push to GitHub, delete data/volumes, or make chargeable AI calls without separate approval.
